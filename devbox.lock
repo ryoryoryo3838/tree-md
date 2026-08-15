@@ -1,0 +1,63 @@
+{
+  "lockfile_version": "1",
+  "packages": {
+    "github:NixOS/nixpkgs/nixpkgs-unstable": {
+      "last_modified": "2026-07-24T05:48:35Z",
+      "resolved": "github:NixOS/nixpkgs/335f0738cb2fa9708f3f428e39d2eae975d1338d?lastModified=1784872115"
+    },
+    "github:nixos/nixpkgs/nixpkgs-unstable#dune": {
+      "last_modified": "2026-08-06T00:10:29Z",
+      "resolved": "github:nixos/nixpkgs/70ce234312134a463ba7728e94da2486a1d237ac?lastModified=1785975029#dune"
+    },
+    "opam@latest": {
+      "last_modified": "2026-08-01T16:34:20Z",
+      "resolved": "github:NixOS/nixpkgs/a5cbcfe954791221bfffe2307f7d1a1bf61a871e#opam",
+      "source": "devbox-search",
+      "version": "2.5.2",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/s995i96ygcjd6szhjgygbm54gw0rbqfd-opam-2.5.2",
+              "default": true
+            },
+            {
+              "name": "installer",
+              "path": "/nix/store/45wn5dpmpsh6vw3m26zjvb61mgbzrxk4-opam-2.5.2-installer"
+            }
+          ],
+          "store_path": "/nix/store/s995i96ygcjd6szhjgygbm54gw0rbqfd-opam-2.5.2"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/sjq7g7hdbxvmc33wmlllbr6gvxb646mh-opam-2.5.2",
+              "default": true
+            },
+            {
+              "name": "installer",
+              "path": "/nix/store/9jnda4ch5v7rn3qhcr8v9gr0lqwn6pp5-opam-2.5.2-installer"
+            }
+          ],
+          "store_path": "/nix/store/sjq7g7hdbxvmc33wmlllbr6gvxb646mh-opam-2.5.2"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/0nkadpyzxhpxk8gah4xxg0jxqfa841mw-opam-2.5.2",
+              "default": true
+            },
+            {
+              "name": "installer",
+              "path": "/nix/store/visiqmrh83x8vvc2liwdnz83zjvij4y9-opam-2.5.2-installer"
+            }
+          ],
+          "store_path": "/nix/store/0nkadpyzxhpxk8gah4xxg0jxqfa841mw-opam-2.5.2"
+        }
+      }
+    }
+  }
+}

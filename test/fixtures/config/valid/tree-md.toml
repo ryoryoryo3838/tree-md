@@ -1,0 +1,5 @@
+version = 1
+forest = "forest.toml"
+sources = ["sources/trees", "sources/notes"]
+output = "generated"
+target = "forester-6.0-dev@30b73641cef02433ee158db6ddc77f7b49de60be"

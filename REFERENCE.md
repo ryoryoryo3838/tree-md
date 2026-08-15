@@ -1,0 +1,4 @@
+- https://www.forester-notes.org/index/index.xml
+- https://sr.ht/~jonsterling/forester/
+- https://obsidian.md/help/
+- https://docs.obsidian.md/Home

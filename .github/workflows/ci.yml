@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The repository pins its whole toolchain with Dune package management
+      # (dune-workspace + dune.lock), so the only tool CI needs is dune itself.
+      # devbox provides the exact dune the project is developed against.
+      - name: Install devbox
+        uses: jetify-com/devbox-install-action@v0.13.0
+        with:
+          enable-cache: true
+
+      # Dune fetches and builds the locked dependency closure, including the
+      # pinned OCaml 5.3.0 compiler. Caching this is what keeps CI reasonable.
+      - name: Cache dune package closure
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/dune
+          key: dune-${{ matrix.os }}-${{ hashFiles('dune.lock/**', 'dune-workspace') }}
+          restore-keys: |
+            dune-${{ matrix.os }}-
+
+      - name: Build
+        run: devbox run -- dune build
+
+      - name: Test
+        run: devbox run -- dune runtest
+
+      # tree-md.opam is generated from dune-project; a stale committed copy is
+      # a release hazard, so fail if regenerating it would change the file.
+      - name: Check generated opam file is up to date
+        run: |
+          devbox run -- dune build @install
+          git diff --exit-code -- tree-md.opam

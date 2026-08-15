@@ -1,0 +1,18 @@
+# Dune build artifacts
+_build/
+*.install
+
+# Dune package-management fetch cache (dune.lock/ itself IS tracked)
+.dune/
+
+# devbox / nix local state (devbox.json and devbox.lock ARE tracked)
+.devbox/
+
+# opam local switch, if one is created here
+_opam/
+
+# Editor and OS noise
+*~
+.#*
+\#*#
+.DS_Store

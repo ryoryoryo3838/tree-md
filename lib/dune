@@ -1,0 +1,14 @@
+(library
+ (name tree_md)
+ (public_name tree-md)
+ (libraries cmarkit yaml unix otoml digestif yojson cmdliner))
+
+; The package version is declared once, in dune-project. Version.current is
+; generated from it so that the CLI banner (tree-md --version) and the
+; manifest's "compiler" field can never drift from the released version.
+(rule
+ (targets version.ml)
+ (action
+  (with-stdout-to
+   version.ml
+   (echo "let current = \"%{version:tree-md}\"\n"))))

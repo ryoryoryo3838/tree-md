@@ -1,0 +1,189 @@
+type forest = {
+  path : string;
+  directory : string;
+  tree_roots : (Path_safe.relative * string) list;
+  asset_roots : (Path_safe.relative * string) list;
+}
+
+type t = {
+  path : string;
+  directory : string;
+  forest : forest;
+  source_roots : (Path_safe.relative * string) list;
+  output_root : Path_safe.relative * string;
+  target : string;
+}
+
+let ( let* ) = Result.bind
+
+let diagnostic path message =
+  Error [Diagnostic.make TM401 (Span.Path path) (path ^ ": " ^ message)]
+
+let read_file path =
+  try
+    let channel = open_in_bin path in
+    let contents =
+      Fun.protect
+        ~finally:(fun () -> close_in_noerr channel)
+        (fun () -> really_input_string channel (in_channel_length channel))
+    in
+    Ok contents
+  with
+  | Sys_error message -> diagnostic path ("cannot read file: " ^ message)
+
+let parse path contents =
+  match Otoml.Parser.from_string_result contents with
+  | Ok value -> Ok value
+  | Error message -> diagnostic path message
+
+let table_fields path value =
+  match value with
+  | Otoml.TomlTable fields | Otoml.TomlInlineTable fields -> Ok fields
+  | _ -> diagnostic path "top-level value must be a table"
+
+let find_field name fields = List.assoc_opt name fields
+
+let unknown_field allowed fields =
+  List.find_opt (fun (name, _) -> not (List.mem name allowed)) fields
+
+let require_field path name fields =
+  match find_field name fields with
+  | Some value -> Ok value
+  | None -> diagnostic path ("missing field " ^ name)
+
+let check_closed path allowed fields =
+  match unknown_field allowed fields with
+  | Some (name, _) -> diagnostic path ("unknown field " ^ name)
+  | None -> Ok ()
+
+let string_field path name fields =
+  let* value = require_field path name fields in
+  match value with
+  | Otoml.TomlString value -> Ok value
+  | _ -> diagnostic path (name ^ " must be a string")
+
+let relative_field path name value =
+  match Path_safe.relative value with
+  | Ok path -> Ok path
+  | Error message -> diagnostic path (name ^ ": " ^ message)
+
+let relative_list path name value =
+  let rec decode = function
+    | [] -> Ok []
+    | Otoml.TomlString value :: rest ->
+      let* value = relative_field path name value in
+      let* rest = decode rest in
+      Ok (value :: rest)
+    | _ -> diagnostic path (name ^ " must contain only strings")
+  in
+  match value with
+  | Otoml.TomlArray values -> decode values
+  | _ -> diagnostic path (name ^ " must be an array of strings")
+
+let relative_list_field path name fields =
+  let* value = require_field path name fields in
+  relative_list path name value
+
+let duplicate_relative paths =
+  let rec loop seen = function
+    | [] -> false
+    | path :: rest ->
+      let value = Path_safe.to_string path in
+      if List.mem value seen then true else loop (value :: seen) rest
+  in
+  loop [] paths
+
+let resolved_pairs ~base paths =
+  List.map (fun path -> (path, Path_safe.resolve ~base path)) paths
+
+let overlaps first second =
+  Path_safe.is_within ~root:first second || Path_safe.is_within ~root:second first
+
+let check_source_output_overlap path source_roots output_path =
+  if List.exists (fun (_, source) -> overlaps source output_path) source_roots then
+    diagnostic path "output overlaps a source root"
+  else Ok ()
+
+let check_output_tree path output_path tree_roots =
+  if List.exists (fun (_, tree) -> tree = output_path) tree_roots then Ok ()
+  else diagnostic path "output root is absent from forest.trees"
+
+let decode_forest forest_path value =
+  let* fields = table_fields forest_path value in
+  let* forest_value = require_field forest_path "forest" fields in
+  let* forest_fields = table_fields forest_path forest_value in
+  (* forest.toml is user-owned: unknown keys (e.g. url) are allowed; only
+     trees/assets are validated for type and lexical path safety. *)
+  let* trees =
+    match find_field "trees" forest_fields with
+    | Some value -> relative_list forest_path "forest.trees" value
+    | None -> diagnostic forest_path "missing field forest.trees"
+  in
+  let* assets =
+    match find_field "assets" forest_fields with
+    | Some value -> relative_list forest_path "forest.assets" value
+    | None -> diagnostic forest_path "missing field forest.assets"
+  in
+  if duplicate_relative trees then diagnostic forest_path "duplicate forest tree root"
+  else if duplicate_relative assets then diagnostic forest_path "duplicate forest asset root"
+  else
+    let directory = Filename.dirname forest_path in
+    Ok {
+      path = forest_path;
+      directory;
+      tree_roots = resolved_pairs ~base:directory trees;
+      asset_roots = resolved_pairs ~base:directory assets;
+    }
+
+let load_forest forest_path =
+  let* contents = read_file forest_path in
+  let* value = parse forest_path contents in
+  decode_forest forest_path value
+
+let load ~path =
+  let* contents = read_file path in
+  let* value = parse path contents in
+  let* fields = table_fields path value in
+  let* () = check_closed path ["version"; "forest"; "sources"; "output"; "target"] fields in
+  let* version = require_field path "version" fields in
+  let* () =
+    match version with
+    | Otoml.TomlInteger 1 -> Ok ()
+    | Otoml.TomlInteger _ -> diagnostic path "version must be 1"
+    | _ -> diagnostic path "version must be an integer"
+  in
+  let* target = string_field path "target" fields in
+  let* () =
+    if target <> Forester_6.target then diagnostic path "unsupported target"
+    else Ok ()
+  in
+  let* forest_reference = string_field path "forest" fields in
+  let* forest_reference = relative_field path "forest" forest_reference in
+  let* sources = relative_list_field path "sources" fields in
+  let* output = string_field path "output" fields in
+  let* output = relative_field path "output" output in
+  let absolute_path =
+    try Ok (Unix.realpath path)
+    with
+    | Unix.Unix_error (error, _, _) ->
+      diagnostic path ("cannot resolve path: " ^ Unix.error_message error)
+  in
+  let* absolute_path = absolute_path in
+  let directory = Filename.dirname absolute_path in
+  let source_roots = resolved_pairs ~base:directory sources in
+  let output_root = (output, Path_safe.resolve ~base:directory output) in
+  let* () =
+    if duplicate_relative sources then diagnostic path "duplicate source root"
+    else check_source_output_overlap path source_roots (snd output_root)
+  in
+  let forest_path = Path_safe.resolve ~base:directory forest_reference in
+  let* forest = load_forest forest_path in
+  let* () = check_output_tree path (snd output_root) forest.tree_roots in
+  Ok {
+    path = absolute_path;
+    directory;
+    forest;
+    source_roots;
+    output_root;
+    target;
+  }

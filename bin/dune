@@ -1,0 +1,4 @@
+(executable
+ (name main)
+ (public_name tree-md)
+ (libraries tree-md cmdliner))
