@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `alcotest` is now a `with-test` dependency and is no longer forced on
   consumers of the library.
 
+### Removed
+
+- `tree-md.opam.locked`. It duplicated `dune.lock/` while drifting out of step
+  with it, leaving it ambiguous which lockfile was authoritative. `dune.lock/`
+  is now the single lock artifact; regenerate an opam-native lock with
+  `opam lock tree-md.opam` if one is needed.
+
 ## [0.1.0]
 
 Initial implementation.

@@ -168,17 +168,24 @@ shared switch. All carry permissive licenses or the OCaml linking exception.
 
 ## Lockfile
 
-There are two lock artifacts, with different roles:
-
-| File | Role | Authoritative? |
-| --- | --- | --- |
-| [`dune.lock/`](./dune.lock) | Closure used by `dune build` via `(pkg enabled)`. Regenerated with `dune pkg lock`. Pinned to OCaml 5.3.0 by the `(constraints ...)` in [`dune-workspace`](./dune-workspace). | **Yes** |
-| [`tree-md.opam.locked`](./tree-md.opam.locked) | Snapshot of an `opam`-managed development switch, generated with `opam lock tree-md.opam`. Retained for opam-based workflows. | No |
+[`dune.lock/`](./dune.lock) is the single lock artifact. It is the closure used
+by `dune build` via `(pkg enabled)`, is regenerated with `dune pkg lock`, and is
+pinned to OCaml 5.3.0 by the `(constraints ...)` stanza in
+[`dune-workspace`](./dune-workspace). It pins every dependency, including the
+compiler, so it can recreate this build environment on another host without an
+opam switch.
 
 Note that [`tree-md.opam`](./tree-md.opam) declares **lower bounds** (`>=`),
-which express the supported version range for publication, while the lock
-artifacts carry the exact pins. The two therefore differ by design: a `>=`
-constraint in the opam file is not a loosened pin.
+which express the supported version range for publication, while `dune.lock/`
+carries the exact pins. The two therefore differ by design: a `>=` constraint in
+the opam file is not a loosened pin.
+
+A second lockfile, `tree-md.opam.locked`, previously recorded a snapshot of an
+`opam`-managed development switch. It was removed because it duplicated
+`dune.lock/` while drifting out of step with it, which made it ambiguous which
+file was authoritative. Recover it from git history if an opam-native lock is
+ever wanted, and regenerate it with `opam lock tree-md.opam` rather than reusing
+the stale copy.
 
 Because `dune.lock/` is regenerated independently, a few resolved patch
 versions in the tables above may lag it (for example `dune pkg lock` currently

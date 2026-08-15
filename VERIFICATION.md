@@ -316,4 +316,4 @@ expressions from `opam show`, source URLs, runtime/build/test classification,
 and the explicit confirmation that no linked dependency is AGPL/GPL/plain-LGPL
 (any LGPL-expression linked package carries the `OCaml-LGPL-linking-exception`;
 GPL packages `menhir` and `conf-pkg-config` are build tools whose licenses do
-not propagate). Reproducibility is provided by `tree-md.opam.locked`.
+not propagate). Reproducibility is provided by `dune.lock/`.
