@@ -378,6 +378,32 @@ let expect_blocks name text =
     let msgs = List.map (fun d -> d.Tree_md.Diagnostic.message) diags |> String.concat "; " in
     Alcotest.fail (name ^ ": " ^ msgs)
 
+(* An anchor ending a heading names the subtree that heading opens — the one
+   spelling Obsidian and Forester both understand. *)
+let test_heading_anchor_names_subtree () =
+  match expect_blocks "heading anchor" "# Root\n\n## Named ^my-sec\n\nbody\n" with
+  | [ { bnode = Tree_md.Ir.Heading _; _ };
+      { bnode = Tree_md.Ir.Subtree_directive "my-sec"; _ };
+      { bnode = Tree_md.Ir.Heading { title = [ { node = Tree_md.Ir.Text "Named"; _ } ]; _ }; _ };
+      { bnode = Tree_md.Ir.Paragraph _; _ } ] -> ()
+  | blocks ->
+    Alcotest.fail ("expected the anchor to name the subtree, got "
+      ^ String.concat ", " (List.map (fun (b : Tree_md.Ir.block) -> block_node_to_string b.Tree_md.Ir.bnode) blocks))
+
+(* Anchoring and the directive say the same thing, so saying both is the
+   existing two-directives error rather than a silent winner. The clash is a
+   question about the shape of the tree, so the outline is what reports it. *)
+let test_heading_anchor_and_directive_conflict () =
+  match parse "# Root\n\n<!-- id: one -->\n## Named ^two\n\nbody\n" with
+  | Error diags ->
+    let msgs = List.map (fun d -> d.Tree_md.Diagnostic.message) diags |> String.concat "; " in
+    Alcotest.fail ("expected the document to parse, got: " ^ msgs)
+  | Ok doc -> (
+    match Tree_md.Outline.build ~root_id:"notes" doc with
+    | Ok _ -> Alcotest.fail "expected naming a subtree twice to be rejected"
+    | Error diags -> Alcotest.(check bool) "has TM104" true (has_diag_code diags "TM104"))
+
+
 (* The note in `note#^id` only locates the anchor; the subtree's identity is the
    anchor itself, so that is what the reference resolves to. *)
 let test_embed_subtree_anchor () =
@@ -714,6 +740,8 @@ let () =
     ; "seven_hashes_rejected", [ test_case "seven_hashes_rejected" `Quick test_seven_hashes_rejected ]
     ; "escaped_hashes_still_a_paragraph", [ test_case "escaped_hashes_still_a_paragraph" `Quick test_escaped_hashes_still_a_paragraph ]
     ; "embed_normalization", [ test_case "embed_normalization" `Quick test_embed_normalization ]
+    ; "heading_anchor_names_subtree", [ test_case "heading_anchor_names_subtree" `Quick test_heading_anchor_names_subtree ]
+    ; "heading_anchor_and_directive_conflict", [ test_case "heading_anchor_and_directive_conflict" `Quick test_heading_anchor_and_directive_conflict ]
     ; "id_directive", [ test_case "id_directive" `Quick test_id_directive ]
     ; "id_directive_needs_identifier", [ test_case "id_directive_needs_identifier" `Quick test_id_directive_needs_identifier ]
     ; "embed_subtree_anchor", [ test_case "embed_subtree_anchor" `Quick test_embed_subtree_anchor ]

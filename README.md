@@ -249,6 +249,7 @@ delimiter, so `---` inside the body is *not* a thematic break. Use `***` or
 | `# Title` as the **first block** | root `\title{Title}` |
 | `##` – `######` | nested `\subtree{ \title{...} ... }` |
 | `<!-- subtree: ID -->` or `<!-- id: ID -->` before a heading | named `\subtree[ID]{ ... }` |
+| `## Heading ^ID` — an anchor ending a heading | named `\subtree[ID]{ \title{Heading} ... }` |
 | `<!-- h3 -->` | untitled `\subtree{ ... }` at level 3 |
 | `<!-- h3:ID -->` | untitled, named `\subtree[ID]{ ... }` at level 3 |
 | `<!-- /h3 -->` | closes every open subtree at level 3 or deeper |

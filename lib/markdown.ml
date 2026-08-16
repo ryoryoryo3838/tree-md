@@ -557,7 +557,7 @@ let parse_directive inner =
    addresses the subtree by name and has no use for it, so it is dropped rather
    than emitted as text. Only a trailing token counts, and only one that starts
    the run or follows a space, which is what keeps `x^2` intact. *)
-let strip_block_anchor (inlines : Ir.inline list) : Ir.inline list =
+let take_block_anchor (inlines : Ir.inline list) : Ir.inline list * string option =
   let is_alnum c =
     (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
   in
@@ -577,14 +577,16 @@ let strip_block_anchor (inlines : Ir.inline list) : Ir.inline list =
         let rec trim_end i =
           if i > 0 && (s.[i - 1] = ' ' || s.[i - 1] = '\t') then trim_end (i - 1) else i
         in
-        Some (String.sub s 0 (trim_end caret))
+        Some (String.sub s 0 (trim_end caret), String.sub s start (len - start))
   in
+  let anchor = ref None in
   let rec strip_last = function
     | [] -> []
     | [ ({ Ir.node = Ir.Text s; _ } as inline) ] -> (
       match without_anchor s with
       | None -> [ inline ]
-      | Some rest ->
+      | Some (rest, id) ->
+        anchor := Some id;
         if String.trim rest = "" then [] else [ { inline with Ir.node = Ir.Text rest } ])
     | inline :: rest -> inline :: strip_last rest
   in
@@ -594,7 +596,10 @@ let strip_block_anchor (inlines : Ir.inline list) : Ir.inline list =
     | [ { Ir.node = Ir.Soft_break | Ir.Hard_break; _ } ] -> []
     | inline :: rest -> inline :: drop_trailing_break rest
   in
-  drop_trailing_break (strip_last inlines)
+  let stripped = drop_trailing_break (strip_last inlines) in
+  (stripped, !anchor)
+
+let strip_block_anchor inlines = fst (take_block_anchor inlines)
 
 (* Lower a single inline list, then check for paragraph normalization.
    Returns either a block_node (Paragraph, Embed, or Display_math)
@@ -688,7 +693,12 @@ let rec lower_blocks source_path depth defs block acc_blocks acc_diags =
       let inline = Cmarkit.Block.Heading.inline h in
       let inlines_rev, diags = lower_inlines source_path 0 defs inline [] [] in
       let all_diags = acc_diags @ diags in
-      let title = filter_wiki_wrappers (List.rev inlines_rev) in
+      (* An anchor at the end of a heading names the subtree the heading opens.
+         It is the one spelling both sides already understand: Obsidian sees a
+         block it can link to, Forester gets an address that survives the
+         heading being rewritten. It is equivalent to writing the directive
+         above the heading, so it becomes one. *)
+      let title, anchor = take_block_anchor (filter_wiki_wrappers (List.rev inlines_rev)) in
       if title = [] then
         (* An empty heading used to compile to \title{}, which is a titled
            subtree whose title happens to be blank, not an untitled one. *)
@@ -697,7 +707,13 @@ let rec lower_blocks source_path depth defs block acc_blocks acc_diags =
         (acc_blocks, diag :: all_diags)
       else
         let node = Ir.Heading { level; title } in
-        ({ Ir.bnode = node; bspan = span } :: acc_blocks, all_diags)
+        let blocks =
+          match anchor with
+          | None -> acc_blocks
+          | Some id ->
+            { Ir.bnode = Ir.Subtree_directive id; bspan = span } :: acc_blocks
+        in
+        ({ Ir.bnode = node; bspan = span } :: blocks, all_diags)
 
   | Cmarkit.Block.Block_quote (bq, bq_meta) ->
     let span = meta_span source_path 0 bq_meta in
