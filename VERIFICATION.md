@@ -11,7 +11,7 @@ plus the `test/fixtures/compat` fixture.
 
 ## Full-suite status
 
-- 18 Alcotest suites, **442 tests, all passing** (`dune runtest`).
+- 18 Alcotest suites, **478 tests, all passing** (`dune runtest`).
 - Cram scenario `cli.t` runs under `dune runtest` and passes.
 - All 26 stable diagnostic codes (`TM001`–`TM500`) are exercised by at least
   one test (verified by code search; see the Diagnostics section).
@@ -149,6 +149,8 @@ plus the `test/fixtures/compat` fixture.
 | Collisions reported with both definition locations | `forest_index_test.ml` (`root_versus_named_subtree`, `generated_versus_handwritten_root`); `TM201` |
 | Wiki/embed closed-world resolution; attributions resolve | `forest_index_test.ml` (`unresolved_wiki_link`, `unresolved_embed`, `unresolved_attributions`, `forest_wide_resolution_ok`, `literal_and_plain_link_ignored`); `TM202` |
 | `.tree`-suffixed targets fall back to the stem; exact match wins; emission uses the identity | `forest_index_test.ml` (`tree_suffix_resolves`, `tree_suffix_exact_match_wins`, `tree_suffix_unresolved_errors`); `forester_6_test.ml` (`resolved_reference_uses_identity`) |
+| `note#^id` resolves to the subtree `id`; `#^id` alone names the current note's; `#Heading` is `TM105` | `block_test.ml` (`embed_subtree_anchor`, `link_subtree_anchor`, `same_note_anchor`, `heading_fragment_rejected`) |
+| Trailing `^id` block anchors are stripped, not emitted; `x^2` is untouched; an anchor-only paragraph is dropped | `block_test.ml` (`block_anchor_stripped`, `caret_in_text_kept`, `standalone_anchor_dropped`) |
 | Ordinary links exempt from closed-world rule | `forest_index_test.ml` (`single_match_routes`) |
 | Multi-location diagnostics | `forest_index_test.ml` (`duplicate_subtree_orders_by_byte`); `diagnostic_test.ml` (`sort_by_path_then_byte`, `path_location_sorts_after_span`, `no_location_sorts_last`) |
 

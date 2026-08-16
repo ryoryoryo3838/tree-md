@@ -431,6 +431,32 @@ The exact spelling is tried first, so a tree whose identity genuinely is
 `notes.tree` is not shadowed, and an unresolvable `[[missing.tree]]` is still a
 `TM202`.
 
+### The subtree anchor rule
+
+Obsidian cannot address a subtree. It addresses a note, and reaches a subtree by
+anchoring a block inside it:
+
+| Markdown | Forester output |
+| --- | --- |
+| `![[notes#^aside]]` | `\transclude{aside}` |
+| `[[notes#^aside\|the remark]]` | `[the remark](aside)` |
+| `[[#^aside]]` | `[[aside]]` — the current note's own subtree |
+| `A remark. ^aside` | `\p{A remark.}` — the anchor is dropped |
+
+The note in that spelling only locates the anchor; the subtree's identity *is*
+the anchor, so that is what the reference resolves to and what gets emitted —
+the identity, never the spelling, exactly as with the `.tree` suffix. The
+resolved id then goes through the closed-world check like any other target, so
+`![[notes#^missing]]` is a `TM202`.
+
+`#Heading` names a section rather than a subtree, and a section has no Forester
+address unless the heading was given one, so it is a `TM105` that says as much.
+
+A trailing `^id` is how Obsidian marks the block, not content, so it is stripped
+rather than emitted. Only a token at the end of a block counts, and only one
+that starts the run or follows a space — `the value x^2` keeps its caret. A
+paragraph that held nothing but an anchor leaves no `\p{}` behind.
+
 ## Math
 
 | Markdown | Forester output |

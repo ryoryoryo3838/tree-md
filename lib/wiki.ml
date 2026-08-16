@@ -151,6 +151,29 @@ let parse_wiki_body body =
   in
   loop 0
 
+(* Obsidian cannot address a subtree directly: it addresses a note, and reaches
+   a subtree by anchoring a block inside it, `[[note#^id]]`. The note in that
+   spelling is only a locator — Forester's identity for the subtree is the
+   anchor — so the fragment is what the reference resolves to. The same bargain
+   as the `.tree` suffix rule: accept the spelling Obsidian writes, emit the
+   identity. `[[#^id]]` names a subtree of the current note and is equally
+   unambiguous, so the locator may be empty. *)
+let split_fragment target =
+  match String.index_opt target '#' with
+  | None -> (target, None)
+  | Some i ->
+    let note = String.sub target 0 i in
+    let fragment = String.sub target (i + 1) (String.length target - i - 1) in
+    (note, Some fragment)
+
+(* A fragment addresses a subtree only in the `^id` form. `#Heading` is how
+   Obsidian names a *section*, which has no Forester address unless the heading
+   was given one, so it cannot be resolved here. *)
+let anchor_id fragment =
+  let len = String.length fragment in
+  if len >= 2 && fragment.[0] = '^' then Some (String.sub fragment 1 (len - 1))
+  else None
+
 let valid_wiki_alias = function
   | None -> true
   | Some s -> String.length s > 0
@@ -188,9 +211,31 @@ let wiki_diagnostics body source_path info =
        "multiple unescaped pipes in wiki body"]
   else
     let target, alias = parse_wiki_body body in
-    if not (Metadata.valid_id target) then
-      [Diagnostic.make TM105 (Span.Source_span span)
-         ("invalid wiki target: \"" ^ target ^ "\"")]
+    let note, fragment = split_fragment target in
+    let target_diags =
+      match fragment with
+      | None ->
+        if Metadata.valid_id note then []
+        else
+          [Diagnostic.make TM105 (Span.Source_span span)
+             ("invalid wiki target: \"" ^ note ^ "\"")]
+      | Some fragment -> (
+        match anchor_id fragment with
+        | None ->
+          [Diagnostic.make TM105 (Span.Source_span span)
+             ("wiki fragment \"#" ^ fragment
+              ^ "\" does not name a subtree; write \"#^id\", which is how \
+                 Obsidian anchors one")]
+        | Some id ->
+          if not (Metadata.valid_id id) then
+            [Diagnostic.make TM105 (Span.Source_span span)
+               ("invalid subtree anchor: \"^" ^ id ^ "\"")]
+          else if note <> "" && not (Metadata.valid_id note) then
+            [Diagnostic.make TM105 (Span.Source_span span)
+               ("invalid wiki target: \"" ^ note ^ "\"")]
+          else [])
+    in
+    if target_diags <> [] then target_diags
     else if not (valid_wiki_alias alias) then
       let msg =
         match alias with
@@ -332,6 +377,14 @@ let validate_wiki_body ~source_path ~info =
   let diags = wiki_diagnostics body source_path info in
   if diags = [] then begin
     let target, alias = parse_wiki_body body in
-    Ok (target, alias)
+    (* What comes out is the identity, never the spelling: `note#^id` resolves
+       to the subtree `id`, and the note that located it is dropped. *)
+    let note, fragment = split_fragment target in
+    let identity =
+      match Option.bind fragment anchor_id with
+      | Some id -> id
+      | None -> note
+    in
+    Ok (identity, alias)
   end else
     Error diags

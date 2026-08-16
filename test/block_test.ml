@@ -346,6 +346,66 @@ let test_embed_normalization () =
     let msgs = List.map (fun d -> d.Tree_md.Diagnostic.message) diags |> String.concat "; " in
     Alcotest.fail ("expected Ok, got: " ^ msgs)
 
+(* ── Obsidian subtree anchors ── *)
+
+let expect_blocks name text =
+  match parse text with
+  | Ok doc -> doc.Tree_md.Ir.blocks
+  | Error diags ->
+    let msgs = List.map (fun d -> d.Tree_md.Diagnostic.message) diags |> String.concat "; " in
+    Alcotest.fail (name ^ ": " ^ msgs)
+
+(* The note in `note#^id` only locates the anchor; the subtree's identity is the
+   anchor itself, so that is what the reference resolves to. *)
+let test_embed_subtree_anchor () =
+  match expect_blocks "anchor embed" "![[notes#^aside]]" with
+  | [ { bnode = Tree_md.Ir.Block_embed "aside"; _ } ] -> ()
+  | blocks -> Alcotest.fail ("expected Block_embed \"aside\", got " ^ String.concat ", " (List.map (fun (b : Tree_md.Ir.block) -> block_node_to_string b.Tree_md.Ir.bnode) blocks))
+
+let test_link_subtree_anchor () =
+  match expect_blocks "anchor link" "see [[notes#^aside|the remark]]" with
+  | [ { bnode = Tree_md.Ir.Paragraph inlines; _ } ] ->
+    let found =
+      List.exists
+        (fun (i : Tree_md.Ir.inline) ->
+          match i.Tree_md.Ir.node with
+          | Tree_md.Ir.Wiki_link { target = "aside"; alias = Some "the remark" } -> true
+          | _ -> false)
+        inlines
+    in
+    Alcotest.(check bool) "link resolves to the anchor" true found
+  | blocks -> Alcotest.fail ("expected a paragraph, got " ^ String.concat ", " (List.map (fun (b : Tree_md.Ir.block) -> block_node_to_string b.Tree_md.Ir.bnode) blocks))
+
+(* `[[#^id]]` names a subtree of the current note and is just as unambiguous. *)
+let test_same_note_anchor () =
+  match expect_blocks "same-note anchor" "![[#^aside]]" with
+  | [ { bnode = Tree_md.Ir.Block_embed "aside"; _ } ] -> ()
+  | blocks -> Alcotest.fail ("expected Block_embed \"aside\", got " ^ String.concat ", " (List.map (fun (b : Tree_md.Ir.block) -> block_node_to_string b.Tree_md.Ir.bnode) blocks))
+
+(* `#Heading` names a section, which has no Forester address of its own. *)
+let test_heading_fragment_rejected () =
+  match parse_result "[[notes#Heading]]" with
+  | Ok _ -> Alcotest.fail "expected a heading fragment to be rejected"
+  | Error diags -> Alcotest.(check bool) "has TM105" true (has_diag_code diags "TM105")
+
+(* The anchor marks the block for the vault; it is not content. *)
+let test_block_anchor_stripped () =
+  match expect_blocks "trailing anchor" "A remark. ^aside" with
+  | [ { bnode = Tree_md.Ir.Paragraph [ { node = Tree_md.Ir.Text "A remark."; _ } ]; _ } ] -> ()
+  | blocks -> Alcotest.fail ("expected the anchor and its space gone, got " ^ String.concat ", " (List.map (fun (b : Tree_md.Ir.block) -> block_node_to_string b.Tree_md.Ir.bnode) blocks))
+
+(* A caret that does not follow a space is arithmetic, not an anchor. *)
+let test_caret_in_text_kept () =
+  match expect_blocks "caret in text" "the value x^2" with
+  | [ { bnode = Tree_md.Ir.Paragraph [ { node = Tree_md.Ir.Text "the value x^2"; _ } ]; _ } ] -> ()
+  | blocks -> Alcotest.fail ("expected the text intact, got " ^ String.concat ", " (List.map (fun (b : Tree_md.Ir.block) -> block_node_to_string b.Tree_md.Ir.bnode) blocks))
+
+(* A paragraph holding nothing but an anchor leaves no `\p{}` behind. *)
+let test_standalone_anchor_dropped () =
+  match expect_blocks "lone anchor" "Body.\n\n^aside" with
+  | [ { bnode = Tree_md.Ir.Paragraph [ { node = Tree_md.Ir.Text "Body."; _ } ]; _ } ] -> ()
+  | blocks -> Alcotest.fail ("expected the anchor paragraph gone, got " ^ String.concat ", " (List.map (fun (b : Tree_md.Ir.block) -> block_node_to_string b.Tree_md.Ir.bnode) blocks))
+
 (* ── Display math normalization ── *)
 
 let test_display_math_normalization () =
@@ -631,6 +691,13 @@ let () =
     ; "seven_hashes_rejected", [ test_case "seven_hashes_rejected" `Quick test_seven_hashes_rejected ]
     ; "escaped_hashes_still_a_paragraph", [ test_case "escaped_hashes_still_a_paragraph" `Quick test_escaped_hashes_still_a_paragraph ]
     ; "embed_normalization", [ test_case "embed_normalization" `Quick test_embed_normalization ]
+    ; "embed_subtree_anchor", [ test_case "embed_subtree_anchor" `Quick test_embed_subtree_anchor ]
+    ; "link_subtree_anchor", [ test_case "link_subtree_anchor" `Quick test_link_subtree_anchor ]
+    ; "same_note_anchor", [ test_case "same_note_anchor" `Quick test_same_note_anchor ]
+    ; "heading_fragment_rejected", [ test_case "heading_fragment_rejected" `Quick test_heading_fragment_rejected ]
+    ; "block_anchor_stripped", [ test_case "block_anchor_stripped" `Quick test_block_anchor_stripped ]
+    ; "caret_in_text_kept", [ test_case "caret_in_text_kept" `Quick test_caret_in_text_kept ]
+    ; "standalone_anchor_dropped", [ test_case "standalone_anchor_dropped" `Quick test_standalone_anchor_dropped ]
     ; "display_math_normalization", [ test_case "display_math_normalization" `Quick test_display_math_normalization ]
     ; "raw_html_block_rejected", [ test_case "raw_html_block_rejected" `Quick test_raw_html_block_rejected ]
     ; "gfm_table_rejected", [ test_case "gfm_table_rejected" `Quick test_gfm_table_rejected ]

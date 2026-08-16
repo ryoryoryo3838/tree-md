@@ -552,13 +552,57 @@ let parse_directive inner =
               | None -> Ok (Some (Dir_close level))
             else Ok (Some (Dir_open { level; id }))
 
+(* Obsidian marks a block so that it can be linked to by writing `^id` at the
+   end of it. That anchor is how the vault addresses the block; Forester
+   addresses the subtree by name and has no use for it, so it is dropped rather
+   than emitted as text. Only a trailing token counts, and only one that starts
+   the run or follows a space, which is what keeps `x^2` intact. *)
+let strip_block_anchor (inlines : Ir.inline list) : Ir.inline list =
+  let is_alnum c =
+    (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+  in
+  let is_id_char c = is_alnum c || c = '-' || c = '_' || c = '.' in
+  let without_anchor s =
+    let len = String.length s in
+    let rec back i = if i > 0 && is_id_char s.[i - 1] then back (i - 1) else i in
+    let start = back len in
+    if start >= len then None (* nothing trailing to take *)
+    else if not (is_alnum s.[start]) then None (* an id starts alphanumeric *)
+    else if start = 0 || s.[start - 1] <> '^' then None
+    else
+      let caret = start - 1 in
+      if caret > 0 && s.[caret - 1] <> ' ' && s.[caret - 1] <> '\t' then None
+      else
+        (* The space that separated the anchor went with it. *)
+        let rec trim_end i =
+          if i > 0 && (s.[i - 1] = ' ' || s.[i - 1] = '\t') then trim_end (i - 1) else i
+        in
+        Some (String.sub s 0 (trim_end caret))
+  in
+  let rec strip_last = function
+    | [] -> []
+    | [ ({ Ir.node = Ir.Text s; _ } as inline) ] -> (
+      match without_anchor s with
+      | None -> [ inline ]
+      | Some rest ->
+        if String.trim rest = "" then [] else [ { inline with Ir.node = Ir.Text rest } ])
+    | inline :: rest -> inline :: strip_last rest
+  in
+  (* A break left dangling by a dropped anchor would print as a stray space. *)
+  let rec drop_trailing_break = function
+    | [] -> []
+    | [ { Ir.node = Ir.Soft_break | Ir.Hard_break; _ } ] -> []
+    | inline :: rest -> inline :: drop_trailing_break rest
+  in
+  drop_trailing_break (strip_last inlines)
+
 (* Lower a single inline list, then check for paragraph normalization.
    Returns either a block_node (Paragraph, Embed, or Display_math)
    plus accumulated diagnostics. *)
 let lower_block_inlines source_path base_byte defs inline acc_diags =
   let inlines_rev, diags = lower_inlines source_path base_byte defs inline [] [] in
   let all_diags = acc_diags @ diags in
-  let inlines = List.rev inlines_rev in
+  let inlines = strip_block_anchor (List.rev inlines_rev) in
   let filtered_unwrapped = filter_wiki_wrappers inlines in
   let filtered = List.filter (fun i ->
     match i.Ir.node with
@@ -627,7 +671,11 @@ let rec lower_blocks source_path depth defs block acc_blocks acc_diags =
         | _ -> (node, diags)
       else (node, diags)
     in
-    ({ Ir.bnode = node'; bspan = span } :: acc_blocks, diags')
+    (* A paragraph holding nothing but a block anchor has been emptied by
+       stripping it; there is no `\p{}` to emit. *)
+    (match node' with
+     | Ir.Paragraph [] -> (acc_blocks, diags')
+     | _ -> ({ Ir.bnode = node'; bspan = span } :: acc_blocks, diags'))
 
   | Cmarkit.Block.Heading (h, h_meta) ->
     let span = meta_span source_path 0 h_meta in
