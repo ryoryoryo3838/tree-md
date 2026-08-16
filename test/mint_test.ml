@@ -71,10 +71,20 @@ let test_addresses_avoid_what_is_taken () =
     write (Filename.concat root "trees-md/b.tree.md") "# B\n";
     let minted =
       plan_ok "plan"
-        (Mint.plan (config root) ~taken:[ "0001"; "0002" ] (discovery root ["a"; "b"]))
+        (Mint.plan (config root) ~taken:[ "0000"; "0002" ] (discovery root ["a"; "b"]))
     in
     Alcotest.(check (list string)) "skips taken, and each other"
-      [ "0003"; "0004" ] (List.map (fun (m : Mint.minted) -> m.Mint.id) minted))
+      [ "0001"; "0003" ] (List.map (fun (m : Mint.minted) -> m.Mint.id) minted))
+
+(* Sequential starts at zero, as the plugin does; the two mint into one
+   namespace and must not disagree about where it begins. *)
+let test_sequential_starts_at_zero () =
+  with_dir (fun root ->
+    Unix.mkdir (Filename.concat root "trees-md") 0o700;
+    write (Filename.concat root "trees-md/a.tree.md") "# A\n";
+    let minted = plan_ok "plan" (Mint.plan (config root) ~taken:[] (discovery root ["a"])) in
+    Alcotest.(check (list string)) "first address"
+      [ "0000" ] (List.map (fun (m : Mint.minted) -> m.Mint.id) minted))
 
 (* The address goes in; every byte already in the note stays. *)
 let test_apply_inserts_into_existing_frontmatter () =
@@ -117,6 +127,7 @@ let () =
     [ "plan", [
         test_case "states_id_is_left_alone" `Quick test_states_id_is_left_alone;
         test_case "addresses_avoid_what_is_taken" `Quick test_addresses_avoid_what_is_taken;
+        test_case "sequential_starts_at_zero" `Quick test_sequential_starts_at_zero;
       ]
     ; "apply", [
         test_case "inserts_into_existing_frontmatter" `Quick test_apply_inserts_into_existing_frontmatter;

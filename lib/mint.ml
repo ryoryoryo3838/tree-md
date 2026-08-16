@@ -25,8 +25,11 @@ let next_free (policy : Config.id_policy) taken used =
   in
   match policy.Config.scheme with
   | Config.Sequential ->
+    (* From zero, matching the plugin. The two mint into one namespace, so a
+       forest must not get a different first address depending on which tool
+       reached it. *)
     let rec search n = if is_free n then n else search (n + 1) in
-    search 1
+    search 0
   | Config.Random ->
     let span = int_of_float (36. ** float_of_int policy.Config.width) in
     let rec search attempts =

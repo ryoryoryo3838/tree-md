@@ -198,7 +198,10 @@ let id_policy path fields =
     let* alphabet =
       field "alphabet" default_id_policy.alphabet (function
         | Otoml.TomlString value ->
-          if value = "" then diagnostic path "id.alphabet must not be empty"
+          if String.length value < 2 then
+            (* Base one has no positional notation: encoding would not
+               terminate. *)
+            diagnostic path "id.alphabet needs at least two digits"
           else if not (String.for_all id_char value) then
             diagnostic path "id.alphabet may only use [A-Za-z0-9._-]"
           else if not (alnum value.[0]) then
