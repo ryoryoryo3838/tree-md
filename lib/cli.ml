@@ -145,9 +145,10 @@ let run_build config_path =
   guard (fun () ->
     let result = Workspace.build ~config_path in
     emit_diagnostics result.Workspace.diagnostics;
-    if result.Workspace.diagnostics = [] then
+    if result.Workspace.diagnostics = [] then begin
       print_minted result.Workspace.minted;
-      print_build_summary result.Workspace.summary;
+      print_build_summary result.Workspace.summary
+    end;
     exit_code result)
 
 (* ── Cmdliner terms ── *)

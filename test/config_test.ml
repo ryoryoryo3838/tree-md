@@ -195,7 +195,7 @@ let test_id_defaults () =
         "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" id.Config.alphabet;
       Alcotest.(check int) "width" 4 id.Config.width;
       Alcotest.(check string) "prefix" "" id.Config.prefix;
-      Alcotest.(check bool) "sequential" true (id.Config.scheme = Config.Sequential);
+      Alcotest.(check bool) "random" true (id.Config.scheme = Config.Random);
       Alcotest.(check bool) "build mints" true (id.Config.mint = Config.By_build))
 
 let test_id_overrides () =

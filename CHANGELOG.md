@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Front matter `id`, which states a tree's identity instead of taking it from
+  the file name. The output is named by the identity, so `id: 0073` in
+  `a/about-me.tree.md` lands in `a/0073.tree`, and the note can be renamed
+  without moving the address the site and every reference already use. A
+  reference resolves against identities first and file names second, so
+  existing forests keep working unchanged.
+
+- `<!-- id: ID -->` as a synonym of `<!-- subtree: ID -->`, and a trailing
+  `^ID` on a heading, which names the subtree that heading opens. The anchor
+  form is what Obsidian writes for a block reference, so one note spells a
+  subtree's address the same way in both tools.
+
+- `tree-md build` gives an address to every tree that states none, writes it
+  into the note's front matter, and reports what it gave to what. The scheme
+  follows Forester's own convention — a base-36 number zero-padded to four
+  digits — and is configurable under `[id]` (`alphabet`, `width`, `scheme`,
+  `prefix`, `mint`). An `id` that is already written is never minted over, and
+  a forest that does not compile is never rewritten. `mint = "off"` hands the
+  job to something else — the Obsidian plugin, which mints from the same
+  policy.
+
 - Subtree directives `<!-- hN -->`, `<!-- hN:ID -->`, and `<!-- /hN -->`
   (`N` = 2–6). Markdown headings can only express a *titled* section that runs
   until the next heading of the same or a lower level, so two Forester shapes

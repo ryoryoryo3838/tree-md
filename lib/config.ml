@@ -21,11 +21,18 @@ type id_policy = {
 }
 
 (* Forester's own convention, from its documentation: "NNNN is a four-digit
-   base-36 number … so that you are not tempted to rename it". *)
+   base-36 number … so that you are not tempted to rename it".
+
+   Random rather than sequential, because addresses are minted from more than
+   one place — this compiler, and the Obsidian plugin, possibly on a phone with
+   no sight of the forest. Two sequential minters would hand out the same next
+   number; two random ones collide only by chance, and each checks what is
+   already taken before it writes. A single-writer forest can say
+   `scheme = "sequential"` and get dense, readable addresses back. *)
 let default_id_policy = {
   alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
   width = 4;
-  scheme = Sequential;
+  scheme = Random;
   prefix = "";
   mint = By_build;
 }

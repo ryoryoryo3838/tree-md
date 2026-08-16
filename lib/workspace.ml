@@ -776,28 +776,27 @@ let lock_and_build config f =
   | Error diagnostics ->
     { summary = zero_summary; minted = []; diagnostics = List.sort Diagnostic.compare diagnostics }
 
-(* Before anything is compiled for output: give an address to every tree that
-   states none, and write it into the note. The identities come from a real
-   parse of the whole forest rather than a guess, because minting a collision
-   would publish two trees at one URL — and the address has been written into
-   the source by the time anything could notice. *)
-let mint_addresses config =
+(* Give an address to every tree that states none, and write it into the note.
+   Run only once the forest has compiled: a forest that does not compile is
+   never rewritten, the same promise the output side already makes.
+
+   The identities come from a real parse of the whole forest rather than a
+   guess, because minting a collision would publish two trees at one URL — and
+   the address is in the source by the time anything could notice. *)
+let mint_addresses config discovery =
   match config.Config.id.Config.mint with
   | Config.Off -> Ok []
   | Config.By_build -> (
-    match Discovery.scan config with
+    match Compiler.identities config discovery with
     | Error diagnostics -> Error diagnostics
-    | Ok discovery -> (
-      match Compiler.identities config discovery with
+    | Ok taken -> (
+      match Mint.plan config ~taken discovery with
       | Error diagnostics -> Error diagnostics
-      | Ok taken -> (
-        match Mint.plan config ~taken discovery with
+      | Ok [] -> Ok []
+      | Ok planned -> (
+        match Mint.apply planned with
         | Error diagnostics -> Error diagnostics
-        | Ok [] -> Ok []
-        | Ok planned -> (
-          match Mint.apply planned with
-          | Error diagnostics -> Error diagnostics
-          | Ok () -> Ok planned))))
+        | Ok () -> Ok planned)))
 
 let build ~config_path =
   let report diagnostics =
@@ -828,10 +827,18 @@ let build ~config_path =
        else
          (* No journal and no orphan stage: compile and validate before any
             output state is created, so a failing forest never writes. *)
-         match mint_addresses config with
+         match compile config with
+         | Error diagnostics -> report diagnostics
+         | Ok (first_expecteds, first_discovery) ->
+         (* Addresses are handed out only to a forest that compiles, and the
+            recompile is what turns them into the outputs' names. *)
+         match mint_addresses config first_discovery with
          | Error diagnostics -> report diagnostics
          | Ok minted ->
-         match compile config with
+         match
+           (if minted = [] then Ok (first_expecteds, first_discovery)
+            else compile config)
+         with
          | Error diagnostics -> report diagnostics
          | Ok (expecteds, discovery) ->
            let pre_digests = input_digests config discovery in

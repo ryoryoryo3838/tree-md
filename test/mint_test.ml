@@ -35,6 +35,13 @@ let config root =
     target = Forester_6.target;
     id = Config.default_id_policy }
 
+(* The default is random, which no assertion about particular addresses can
+   pin down. Tests about where the counter starts and what it steps over ask
+   for the sequential scheme by name. *)
+let config_sequential root =
+  let base = config root in
+  { base with Config.id = { base.Config.id with Config.scheme = Config.Sequential } }
+
 let source root name =
   { Discovery.source_root = Filename.concat root "trees-md";
     path = Filename.concat root ("trees-md/" ^ name ^ ".tree.md");
@@ -71,7 +78,8 @@ let test_addresses_avoid_what_is_taken () =
     write (Filename.concat root "trees-md/b.tree.md") "# B\n";
     let minted =
       plan_ok "plan"
-        (Mint.plan (config root) ~taken:[ "0000"; "0002" ] (discovery root ["a"; "b"]))
+        (Mint.plan (config_sequential root) ~taken:[ "0000"; "0002" ]
+           (discovery root ["a"; "b"]))
     in
     Alcotest.(check (list string)) "skips taken, and each other"
       [ "0001"; "0003" ] (List.map (fun (m : Mint.minted) -> m.Mint.id) minted))
@@ -82,9 +90,41 @@ let test_sequential_starts_at_zero () =
   with_dir (fun root ->
     Unix.mkdir (Filename.concat root "trees-md") 0o700;
     write (Filename.concat root "trees-md/a.tree.md") "# A\n";
-    let minted = plan_ok "plan" (Mint.plan (config root) ~taken:[] (discovery root ["a"])) in
+    let minted =
+      plan_ok "plan" (Mint.plan (config_sequential root) ~taken:[] (discovery root ["a"]))
+    in
     Alcotest.(check (list string)) "first address"
       [ "0000" ] (List.map (fun (m : Mint.minted) -> m.Mint.id) minted))
+
+(* The default scheme is random. Nothing can be said about which addresses it
+   picks, but everything can be said about their shape: policy-legal, distinct
+   from each other, and clear of what the forest already answers to. *)
+let test_random_is_the_default () =
+  with_dir (fun root ->
+    Unix.mkdir (Filename.concat root "trees-md") 0o700;
+    let names = [ "a"; "b"; "c"; "d" ] in
+    List.iter
+      (fun n ->
+        write (Filename.concat root ("trees-md/" ^ n ^ ".tree.md")) ("# " ^ n ^ "\n"))
+      names;
+    Alcotest.(check bool) "default is random" true
+      (Config.default_id_policy.Config.scheme = Config.Random);
+    let minted =
+      plan_ok "plan" (Mint.plan (config root) ~taken:[ "ZZZZ" ] (discovery root names))
+    in
+    let ids = List.map (fun (m : Mint.minted) -> m.Mint.id) minted in
+    Alcotest.(check int) "one each" (List.length names) (List.length ids);
+    Alcotest.(check int) "all distinct" (List.length ids)
+      (List.length (List.sort_uniq String.compare ids));
+    List.iter
+      (fun id ->
+        Alcotest.(check int) ("width of " ^ id) 4 (String.length id);
+        Alcotest.(check bool) ("digits of " ^ id) true
+          (String.for_all
+             (fun c -> String.contains Config.default_id_policy.Config.alphabet c)
+             id);
+        Alcotest.(check bool) ("clear of taken: " ^ id) true (id <> "ZZZZ"))
+      ids)
 
 (* The address goes in; every byte already in the note stays. *)
 let test_apply_inserts_into_existing_frontmatter () =
@@ -128,6 +168,7 @@ let () =
         test_case "states_id_is_left_alone" `Quick test_states_id_is_left_alone;
         test_case "addresses_avoid_what_is_taken" `Quick test_addresses_avoid_what_is_taken;
         test_case "sequential_starts_at_zero" `Quick test_sequential_starts_at_zero;
+        test_case "random_is_the_default" `Quick test_random_is_the_default;
       ]
     ; "apply", [
         test_case "inserts_into_existing_frontmatter" `Quick test_apply_inserts_into_existing_frontmatter;

@@ -243,7 +243,7 @@ external   slides        video   bibtex   author  toc     lang
 [id]
 alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"  # 36進
 width    = 4          # 下限の桁数。大きい数は単に桁が伸びる
-scheme   = "sequential"   # 複数人で書く forest では "random"
+scheme   = "random"       # 一人で書く forest では "sequential"
 prefix   = ""
 mint     = "build"    # "off" にすると、要求を別の道具に委ねる
 ```

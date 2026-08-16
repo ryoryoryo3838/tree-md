@@ -1,7 +1,3 @@
----
-id: alpha
----
-
 # Alpha
 
 [[missing]]

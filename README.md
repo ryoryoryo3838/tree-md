@@ -246,7 +246,7 @@ zero-padded to four digits — and is configurable:
 [id]
 alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"  # base 36
 width    = 4          # minimum digits; a larger number simply takes more
-scheme   = "sequential"   # or "random", for a forest with several contributors
+scheme   = "random"       # or "sequential", for a forest with a single writer
 prefix   = ""
 mint     = "build"    # or "off", to have something else fulfil the requests
 ```
