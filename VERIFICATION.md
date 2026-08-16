@@ -11,7 +11,7 @@ plus the `test/fixtures/compat` fixture.
 
 ## Full-suite status
 
-- 19 Alcotest suites, **493 tests, all passing** (`dune runtest`).
+- 20 Alcotest suites, **498 tests, all passing** (`dune runtest`).
 - Cram scenario `cli.t` runs under `dune runtest` and passes.
 - All 26 stable diagnostic codes (`TM001`–`TM500`) are exercised by at least
   one test (verified by code search; see the Diagnostics section).
@@ -46,6 +46,7 @@ plus the `test/fixtures/compat` fixture.
 | Distinct source roots; output not overlapping a source root | `config_test.ml` (`duplicate_source_root`, `source_output_overlap`) |
 | Absolute/empty/`.`/`..` path rejection; output in `[forest].trees` | `config_test.ml` (`absolute_path`, `empty_segment`, `dot_segment`, `dot_dot_segment`, `backslash_path`, `output_absent_from_forest_trees`) |
 | `[id]` policy: defaults follow Forester's convention, overrides load, unusable alphabets/prefixes rejected | `config_test.ml` (`id_defaults`, `id_overrides`, `id_rejects_unusable_policy`) |
+| A stated `id` is never minted over; addresses avoid what is taken; front matter is created when absent and otherwise byte-preserved; minting converges | `mint_test.ml` (`states_id_is_left_alone`, `addresses_avoid_what_is_taken`, `inserts_into_existing_frontmatter`, `creates_frontmatter_when_absent`, `minting_converges`) |
 | Minted addresses match the published Forester convention and are legal identities | `tree_id_test.ml` (`matches_forester_addresses`, `pads_and_widens`, `prefix_and_alphabet`, `result_is_a_valid_id`) |
 | Unsupported `target` is a configuration error | `cli.t/run.t` (`TM401` unsupported-target scenario, exit 2) |
 

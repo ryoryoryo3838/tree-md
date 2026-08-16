@@ -1,5 +1,5 @@
 (tests
- (names source_test diagnostic_test tree_id_test frontmatter_test wiki_test inline_test block_test outline_test forester_6_test compiler_test config_test discovery_test forest_index_test forest_compile_test manifest_test transaction_test workspace_fs_test workspace_test cli_test)
+ (names source_test diagnostic_test tree_id_test mint_test frontmatter_test wiki_test inline_test block_test outline_test forester_6_test compiler_test config_test discovery_test forest_index_test forest_compile_test manifest_test transaction_test workspace_fs_test workspace_test cli_test)
  (libraries tree-md alcotest digestif)
  (deps (source_tree fixtures)))
 
