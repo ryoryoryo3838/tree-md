@@ -5,7 +5,7 @@ open Tree_md
    read-only check and transactional build workflows through that copy, so
    no test writes inside the repository. *)
 
-let golden_source = "# Index\n\nIndex body text.\n"
+let golden_source = "---\nid: index\n---\n\n# Index\n\nIndex body text.\n"
 let golden_output = "\\title{Index}\n\\p{Index body text.}\n"
 let golden_sha256 = Digestif.SHA256.to_hex (Digestif.SHA256.digest_string golden_output)
 
@@ -302,7 +302,7 @@ let test_build_source_edit_replacement () =
   with_workspace (fun ws ->
     let _ = expect_ok "first build" (Workspace.build ~config_path:(config_path ws)) in
     write_file (Filename.concat ws "trees-md/index.tree.md")
-      "# Index\n\nChanged body.\n";
+      "---\nid: index\n---\n\n# Index\n\nChanged body.\n";
     let r = expect_ok "replacement build" (Workspace.build ~config_path:(config_path ws)) in
     Alcotest.(check (list int)) "replaced 1" [0; 1; 0; 0] (counts r);
     Alcotest.(check string) "output replaced"
@@ -336,7 +336,7 @@ let test_build_nested_output_parent_restored () =
   with_workspace (fun ws ->
     let nested_dir = Filename.concat ws "trees-md/a" in
     Unix.mkdir nested_dir 0o700;
-    write_file (Filename.concat nested_dir "page.tree.md") "# Page\n\nNested body.\n";
+    write_file (Filename.concat nested_dir "page.tree.md") "---\nid: page\n---\n\n# Page\n\nNested body.\n";
     let golden_nested = "\\title{Page}\n\\p{Nested body.}\n" in
     let r1 = expect_ok "nested first build" (Workspace.build ~config_path:(config_path ws)) in
     Alcotest.(check (list int)) "created 2" [2; 0; 0; 0] (counts r1);

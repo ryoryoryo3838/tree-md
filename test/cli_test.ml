@@ -18,6 +18,7 @@ let zero_summary : Workspace.summary =
 
 let result_of codes =
   { Workspace.summary = zero_summary;
+    minted = [];
     diagnostics =
       List.map
         (fun code ->

@@ -1,4 +1,5 @@
 ---
+id: index
 date: 2026-08-04
 authors:
   - "[[manual]]"

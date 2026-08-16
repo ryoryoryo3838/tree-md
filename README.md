@@ -251,9 +251,23 @@ prefix   = ""
 mint     = "build"    # or "off", to have something else fulfil the requests
 ```
 
-An address is minted only where one is asked for — an `id:` with no value in
-front matter, or a bare `<!-- id -->` above a heading. A tree that says nothing
-keeps its file name, so turning this on moves no existing address.
+`build` mints for every tree that states no `id`, writes it into the note's
+front matter, and reports what it gave to what:
+
+```console
+$ tree-md build
+minted: trees-md/scratch.tree.md -> 0001
+build: 1 created, 0 replaced, 0 deleted, 2 unchanged
+```
+
+An address is a published URL, so a build that invents one says so rather than
+moving a tree in silence. **An address that is written is never minted over** —
+state the `id` on anything whose address you have given out, and it is left
+alone. Minting is what empties the plan, so a second build has nothing to do.
+
+The addresses come from a real parse of the whole forest, not a guess, because
+minting a collision would publish two trees at one URL and the address would
+already be in the source by the time anything noticed.
 
 `mint = "off"` leaves the requests standing for another tool to fulfil. Which
 address to hand out stays here either way: a forest should have one scheme, not

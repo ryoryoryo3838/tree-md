@@ -79,6 +79,15 @@ let emit_diagnostics diagnostics =
 
 (* ── build summary ── *)
 
+(* An address is a published URL, so a build that invents one says so rather
+   than changing where a tree lives in silence. *)
+let print_minted (minted : Mint.minted list) =
+  List.iter
+    (fun (m : Mint.minted) ->
+      Printf.printf "minted: %s -> %s\n" m.Mint.path m.Mint.id)
+    minted;
+  if minted <> [] then flush stdout
+
 let print_build_summary (summary : Workspace.summary) =
   Printf.printf "build: %d created, %d replaced, %d deleted, %d unchanged\n"
     summary.created summary.replaced summary.deleted summary.unchanged;
@@ -137,6 +146,7 @@ let run_build config_path =
     let result = Workspace.build ~config_path in
     emit_diagnostics result.Workspace.diagnostics;
     if result.Workspace.diagnostics = [] then
+      print_minted result.Workspace.minted;
       print_build_summary result.Workspace.summary;
     exit_code result)
 

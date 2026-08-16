@@ -24,7 +24,14 @@ type summary = {
   unchanged : int;
 }
 
-type result = { summary : summary; diagnostics : Diagnostic.t list }
+type result = {
+  summary : summary;
+  (* Addresses this build gave to trees that stated none. Reported rather than
+     done quietly: an address is a published URL, so a build that invents one
+     has to say so. *)
+  minted : Mint.minted list;
+  diagnostics : Diagnostic.t list;
+}
 
 let zero_summary = { created = 0; replaced = 0; deleted = 0; unchanged = 0 }
 
@@ -272,7 +279,7 @@ let compare_states output_root expecteds old_manifest =
 
 let finish_check output_root start_snapshot diagnostics =
   match Workspace_fs.snapshot ~output_root with
-  | Error d -> { summary = zero_summary; diagnostics = List.sort Diagnostic.compare d }
+  | Error d -> { summary = zero_summary; minted = []; diagnostics = List.sort Diagnostic.compare d }
   | Ok end_snapshot ->
     let state_unchanged =
       start_snapshot.Workspace_fs.manifest = end_snapshot.Workspace_fs.manifest
@@ -280,12 +287,13 @@ let finish_check output_root start_snapshot diagnostics =
       && start_snapshot.Workspace_fs.stage_entries = end_snapshot.Workspace_fs.stage_entries
     in
     if state_unchanged || diagnostics <> [] then
-      { summary = zero_summary; diagnostics = List.sort Diagnostic.compare diagnostics }
+      { summary = zero_summary; minted = []; diagnostics = List.sort Diagnostic.compare diagnostics }
     else
       (* A concurrent writer changed compiler state while check was reading;
          the observed state is unreliable, so success is replaced with an
          exit-code 2 concurrency failure. *)
       { summary = zero_summary;
+        minted = [];
         diagnostics =
           [ tm output_root TM404
               "compiler state changed while check was running; re-run check" ] }
@@ -293,6 +301,7 @@ let finish_check output_root start_snapshot diagnostics =
 let check ~config_path =
   let report diagnostics =
     { summary = zero_summary;
+      minted = [];
       diagnostics = List.sort Diagnostic.compare diagnostics }
   in
   match Config.load ~path:config_path with
@@ -765,11 +774,34 @@ let lock_and_build config f =
   match Workspace_fs.with_build_lock ~output_root:(snd config.Config.output_root) f with
   | Ok result -> result
   | Error diagnostics ->
-    { summary = zero_summary; diagnostics = List.sort Diagnostic.compare diagnostics }
+    { summary = zero_summary; minted = []; diagnostics = List.sort Diagnostic.compare diagnostics }
+
+(* Before anything is compiled for output: give an address to every tree that
+   states none, and write it into the note. The identities come from a real
+   parse of the whole forest rather than a guess, because minting a collision
+   would publish two trees at one URL — and the address has been written into
+   the source by the time anything could notice. *)
+let mint_addresses config =
+  match config.Config.id.Config.mint with
+  | Config.Off -> Ok []
+  | Config.By_build -> (
+    match Discovery.scan config with
+    | Error diagnostics -> Error diagnostics
+    | Ok discovery -> (
+      match Compiler.identities config discovery with
+      | Error diagnostics -> Error diagnostics
+      | Ok taken -> (
+        match Mint.plan config ~taken discovery with
+        | Error diagnostics -> Error diagnostics
+        | Ok [] -> Ok []
+        | Ok planned -> (
+          match Mint.apply planned with
+          | Error diagnostics -> Error diagnostics
+          | Ok () -> Ok planned))))
 
 let build ~config_path =
   let report diagnostics =
-    { summary = zero_summary;
+    { summary = zero_summary; minted = [];
       diagnostics = List.sort Diagnostic.compare diagnostics }
   in
   match Config.load ~path:config_path with
@@ -792,10 +824,13 @@ let build ~config_path =
               normal_build config expecteds)
            with
            | Error diagnostics -> report diagnostics
-           | Ok summary -> { summary; diagnostics = [] })
+           | Ok summary -> { summary; minted = []; diagnostics = [] })
        else
          (* No journal and no orphan stage: compile and validate before any
             output state is created, so a failing forest never writes. *)
+         match mint_addresses config with
+         | Error diagnostics -> report diagnostics
+         | Ok minted ->
          match compile config with
          | Error diagnostics -> report diagnostics
          | Ok (expecteds, discovery) ->
@@ -826,4 +861,4 @@ let build ~config_path =
                     else normal_build config expecteds)
              with
              | Error diagnostics -> report diagnostics
-             | Ok summary -> { summary; diagnostics = [] }))
+             | Ok summary -> { summary; minted; diagnostics = [] }))

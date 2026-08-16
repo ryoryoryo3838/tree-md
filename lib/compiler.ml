@@ -222,6 +222,36 @@ let emit_documents resolutions records =
          | Ok bytes -> (diags, make_expected record root_id bytes :: expecteds)))
     ([], []) records
 
+(* File names are in here as well as identities. A tree that states no id
+   answers to its file name today, and an address that collided with one would
+   silently take a reference away from it. *)
+let identities _config (discovery : Discovery.t) =
+  let from_sources =
+    List.fold_left
+      (fun acc (record : Discovery.source_file) ->
+        let stem = record.Discovery.root_id in
+        match read_source record with
+        | Error _ -> stem :: acc
+        | Ok contents -> (
+          match parse_source record contents with
+          | Error _ -> stem :: acc
+          | Ok (_, document) ->
+            let root = document.Parsed_document.outline.Outline.root_id in
+            let subtrees =
+              List.map
+                (fun (d : Outline.definition) -> d.Outline.id)
+                document.Parsed_document.definitions
+            in
+            (stem :: root :: subtrees) @ acc))
+      [] discovery.Discovery.sources
+  in
+  let handwritten =
+    List.map
+      (fun (r : Discovery.handwritten_root) -> r.Discovery.id)
+      discovery.Discovery.handwritten_roots
+  in
+  Ok (List.sort_uniq String.compare (from_sources @ handwritten))
+
 let compile_forest config discovery =
   let parse_diags, records =
     List.fold_left (fun (diags, records) record ->
