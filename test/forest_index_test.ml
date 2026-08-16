@@ -518,6 +518,66 @@ let test_tree_suffix_unresolved_still_errors () =
     Forest_index.resolve forest index ~documents:[ doc ]
     |> expect_code "suffixed miss" "TM202")
 
+(* Once a tree states its own `id` it is no longer called after its file, but
+   the file name is still what Obsidian autocompletes and writes. *)
+let test_filename_resolves_to_id () =
+  with_fixture (fun root ->
+    let alpha =
+      parse_doc ~root_id:"alpha" ~path:(Filename.concat root "trees-md/alpha.tree.md")
+        "# Alpha\n\n[[information-concept]]\n\n![[information-concept.tree]]\n"
+    in
+    (* The file is `information-concept.tree.md`; the identity is `mlnet-7`. *)
+    let note =
+      parse_doc ~root_id:"mlnet-7"
+        ~path:(Filename.concat root "trees-md/information-concept.tree.md")
+        "# 情報概念\n"
+    in
+    let documents = [ alpha; note ] in
+    let index = expect_build "filename index" ~handwritten:[] ~generated:documents in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match Forest_index.resolve forest index ~documents with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "file-name references rejected" diagnostics)
+    | Ok results ->
+      let resolution = List.assoc "alpha" results in
+      let ids =
+        List.map
+          (fun (r : Ir.reference) -> Resolution.tree_id resolution r.Ir.span)
+          alpha.Parsed_document.references
+        |> List.sort compare
+      in
+      Alcotest.(check (list (option string))) "both rewritten to the identity"
+        [ Some "mlnet-7"; Some "mlnet-7" ] ids)
+
+(* An identity is tried before any file name, so a tree whose `id` matches
+   another tree's file name still wins. *)
+let test_identity_beats_filename () =
+  with_fixture (fun root ->
+    let alpha =
+      parse_doc ~root_id:"alpha" ~path:(Filename.concat root "trees-md/alpha.tree.md")
+        "# Alpha\n\n[[beta]]\n"
+    in
+    (* One file is *called* beta; a different file *is* beta. *)
+    let named_beta =
+      parse_doc ~root_id:"mlnet-8" ~path:(Filename.concat root "trees-md/beta.tree.md")
+        "# Called beta\n"
+    in
+    let is_beta =
+      parse_doc ~root_id:"beta" ~path:(Filename.concat root "trees-md/other.tree.md")
+        "# Is beta\n"
+    in
+    let documents = [ alpha; named_beta; is_beta ] in
+    let index = expect_build "identity index" ~handwritten:[] ~generated:documents in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match Forest_index.resolve forest index ~documents with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "identity lost to a file name" diagnostics)
+    | Ok results ->
+      let resolution = List.assoc "alpha" results in
+      let reference = List.hd alpha.Parsed_document.references in
+      Alcotest.(check (option string)) "no rewrite: the identity matched" None
+        (Resolution.tree_id resolution reference.Ir.span))
+
 let test_forest_wide_resolution_ok () =
   with_fixture (fun root ->
     write_file (Filename.concat root "assets/images/x.png") "image\n";
@@ -576,6 +636,8 @@ let () =
         test_case "tree_suffix_resolves" `Quick test_tree_suffix_reference_resolves;
         test_case "tree_suffix_exact_match_wins" `Quick test_tree_suffix_exact_match_wins;
         test_case "tree_suffix_unresolved_errors" `Quick test_tree_suffix_unresolved_still_errors;
+        test_case "filename_resolves_to_id" `Quick test_filename_resolves_to_id;
+        test_case "identity_beats_filename" `Quick test_identity_beats_filename;
       ]
     ; "assets", [
         test_case "zero_matches_tm203" `Quick test_asset_zero_matches;

@@ -11,7 +11,7 @@ plus the `test/fixtures/compat` fixture.
 
 ## Full-suite status
 
-- 18 Alcotest suites, **478 tests, all passing** (`dune runtest`).
+- 18 Alcotest suites, **482 tests, all passing** (`dune runtest`).
 - Cram scenario `cli.t` runs under `dune runtest` and passes.
 - All 26 stable diagnostic codes (`TM001`–`TM500`) are exercised by at least
   one test (verified by code search; see the Diagnostics section).
@@ -148,6 +148,8 @@ plus the `test/fixtures/compat` fixture.
 | Index of generated roots + explicit subtree IDs + handwritten roots | `forest_index_test.ml` (`forest_wide`, `duplicate_generated_roots`, `duplicate_subtree_orders_by_byte`) |
 | Collisions reported with both definition locations | `forest_index_test.ml` (`root_versus_named_subtree`, `generated_versus_handwritten_root`); `TM201` |
 | Wiki/embed closed-world resolution; attributions resolve | `forest_index_test.ml` (`unresolved_wiki_link`, `unresolved_embed`, `unresolved_attributions`, `forest_wide_resolution_ok`, `literal_and_plain_link_ignored`); `TM202` |
+| Front-matter `id` is the identity and names the output; the file name is the fallback | `frontmatter_test.ml` (`id_key`, `invalid_id_rejected`) |
+| A reference may name the file; identities are tried first | `forest_index_test.ml` (`filename_resolves_to_id`, `identity_beats_filename`) |
 | `.tree`-suffixed targets fall back to the stem; exact match wins; emission uses the identity | `forest_index_test.ml` (`tree_suffix_resolves`, `tree_suffix_exact_match_wins`, `tree_suffix_unresolved_errors`); `forester_6_test.ml` (`resolved_reference_uses_identity`) |
 | `note#^id` resolves to the subtree `id`; `#^id` alone names the current note's; `#Heading` is `TM105` | `block_test.ml` (`embed_subtree_anchor`, `link_subtree_anchor`, `same_note_anchor`, `heading_fragment_rejected`) |
 | Trailing `^id` block anchors are stripped, not emitted; `x^2` is untouched; an anchor-only paragraph is dropped | `block_test.ml` (`block_anchor_stripped`, `caret_in_text_kept`, `standalone_anchor_dropped`) |

@@ -75,6 +75,14 @@ let parse ~root_id source =
       Error (List.sort Diagnostic.compare md_diags)
     | Ok doc ->
       let meta = doc.Ir.metadata in
+      (* A stated `id` is the tree's identity; the file name is only the
+         fallback. That is what lets a note be renamed without moving the
+         address the site and every reference already use. *)
+      let root_id =
+        match raw_metadata.Metadata.id with
+        | Some stated -> stated.Metadata.value
+        | None -> root_id
+      in
       match Outline.build ~root_id doc with
       | Error ol_diags ->
         Error (List.sort Diagnostic.compare ol_diags)
@@ -169,10 +177,25 @@ let parse_source (record : Discovery.source_file) contents =
 let sha256_hex bytes =
   Digestif.SHA256.to_hex (Digestif.SHA256.digest_string bytes)
 
-let make_expected (record : Discovery.source_file) bytes =
+(* The output is named by the tree's identity rather than by the file it came
+   from, so `id: mlnet-7` in `a/note.tree.md` lands in `a/mlnet-7.tree`. The
+   directory is still mirrored: Forester reads identity from the file name
+   alone and treats the directory as organisation. *)
+let output_for (record : Discovery.source_file) root_id =
+  let source = Path_safe.to_string record.Discovery.source_relative in
+  let dir =
+    match String.rindex_opt source '/' with
+    | None -> ""
+    | Some i -> String.sub source 0 (i + 1)
+  in
+  match Path_safe.relative (dir ^ root_id ^ ".tree") with
+  | Ok relative -> relative
+  | Error _ -> record.Discovery.output_relative
+
+let make_expected (record : Discovery.source_file) root_id bytes =
   { source_path = record.Discovery.path;
     source_config_relative = record.Discovery.config_relative;
-    output_relative = record.Discovery.output_relative;
+    output_relative = output_for record root_id;
     bytes;
     sha256 = sha256_hex bytes }
 
@@ -196,7 +219,7 @@ let emit_documents resolutions records =
       | Some resolution ->
         (match emit ~resolution document with
          | Error more -> (more @ diags, expecteds)
-         | Ok bytes -> (diags, make_expected record bytes :: expecteds)))
+         | Ok bytes -> (diags, make_expected record root_id bytes :: expecteds)))
     ([], []) records
 
 let compile_forest config discovery =

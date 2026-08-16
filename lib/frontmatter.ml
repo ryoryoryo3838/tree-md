@@ -12,7 +12,7 @@ let promoted_meta_keys =
   ["position"; "institution"; "venue"; "source"; "doi"; "orcid";
    "external"; "slides"; "video"; "bibtex"; "author"; "toc"; "lang"]
 
-let reserved_keys = ["date"; "taxon"; "authors"; "contributors"; "tags"; "meta"]
+let reserved_keys = ["id"; "date"; "taxon"; "authors"; "contributors"; "tags"; "meta"]
 let all_known_keys = reserved_keys @ promoted_meta_keys
 
 let trim_crlf_end s =
@@ -321,6 +321,22 @@ let parse source =
                          metadata := { !metadata with date = Some located }
                        else
                          emit_diag TM101 ("invalid date: \"" ^ date_str ^ "\"")
+                           pos.start_mark pos.end_mark;
+                       current_key := None
+                     | "id" ->
+                       (* The tree's identity. Stated here rather than taken
+                          from the file name so that the file can be renamed —
+                          retitled, translated — without moving the address the
+                          published site and every reference use. *)
+                       let id_str = scalar.Yaml.value in
+                       if Metadata.valid_id id_str then
+                         let located =
+                           make_located source yaml_source yaml_start id_str
+                             ~start_mark:pos.start_mark ~end_mark:pos.end_mark
+                         in
+                         metadata := { !metadata with id = Some located }
+                       else
+                         emit_diag TM101 ("invalid id: \"" ^ id_str ^ "\"")
                            pos.start_mark pos.end_mark;
                        current_key := None
                      | "taxon" ->

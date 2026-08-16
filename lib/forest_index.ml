@@ -8,7 +8,14 @@ type definition = {
   location : Span.location;
 }
 
-type t = definition StringMap.t
+type t = {
+  by_id : definition StringMap.t;
+  (* An editor addresses notes by file name, so a reference written the way
+     Obsidian writes it names the file rather than the tree. Held apart from
+     the identities, and consulted only after them, so that an id always wins
+     over a file that happens to be called the same thing. *)
+  by_filename : string StringMap.t;
+}
 
 (* ── Location ordering (path, rank, byte), mirroring Diagnostic.compare ── *)
 
@@ -49,6 +56,24 @@ let compare_definitions (a : definition) (b : definition) =
   compare_locations a.location b.location
 
 (* ── build: one global identity index ── *)
+
+(* `a/note.tree.md` -> `note`. The identity may be something else entirely;
+   this is only the name an editor would write. *)
+let source_stem (location : Span.location) =
+  match location with
+  | Span.Source_span span -> (
+    let path = span.Span.path in
+    let base =
+      match String.rindex_opt path '/' with
+      | None -> path
+      | Some i -> String.sub path (i + 1) (String.length path - i - 1)
+    in
+    let suffix = ".tree.md" in
+    let n = String.length base and m = String.length suffix in
+    if n > m && String.sub base (n - m) m = suffix then
+      Some (String.sub base 0 (n - m))
+    else None)
+  | Span.Path _ | Span.No_location -> None
 
 let generated_definitions (doc : Parsed_document.t) : definition list =
   let root =
@@ -110,7 +135,16 @@ let build ~handwritten ~generated =
       | [] -> (diags, index)
     ) grouped ([], StringMap.empty)
   in
-  if diags = [] then Ok index
+  let by_filename =
+    List.fold_left
+      (fun table (doc : Parsed_document.t) ->
+        let outline = doc.Parsed_document.outline in
+        match source_stem (Span.Source_span outline.Outline.span) with
+        | Some stem -> StringMap.add stem outline.Outline.root_id table
+        | None -> table)
+      StringMap.empty generated
+  in
+  if diags = [] then Ok { by_id = index; by_filename }
   else Error (List.sort Diagnostic.compare diags)
 
 (* ── resolve: reference and asset validation per document ── *)
@@ -130,16 +164,39 @@ let strip_tree_suffix target =
   else
     None
 
-(* A tree written as `foo.tree.md` has the identity `foo`, but an editor that
-   addresses notes by filename sees `foo.tree` and writes `[[foo.tree]]`. Accept
-   that spelling by retrying a miss with the suffix removed. The exact match is
-   tried first, so a tree whose identity really is `foo.tree` still wins. *)
+(* Three spellings reach the same tree, tried in this order.
+
+   An identity always wins. Then the `.tree` suffix an editor sees on
+   `foo.tree.md` and writes as `[[foo.tree]]`. Then the bare file name, because
+   a tree that states its own `id` is no longer called after its file, and
+   `[[the-file-name]]` is what Obsidian writes and autocompletes — the file
+   name stays the search key even once it has stopped being the address.
+
+   Ordering is what keeps this unambiguous: a tree whose identity really is
+   `foo.tree`, or one whose id collides with another file's name, still wins. *)
 let resolve_target index target =
-  if StringMap.mem target index then Some target
+  let by_id = index.by_id in
+  if StringMap.mem target by_id then Some target
   else
-    match strip_tree_suffix target with
-    | Some stripped when StringMap.mem stripped index -> Some stripped
-    | Some _ | None -> None
+    let stripped =
+      match strip_tree_suffix target with
+      | Some stripped when StringMap.mem stripped by_id -> Some stripped
+      | Some _ | None -> None
+    in
+    match stripped with
+    | Some _ -> stripped
+    | None -> (
+      let named = StringMap.find_opt target index.by_filename in
+      match named with
+      | Some id when StringMap.mem id by_id -> Some id
+      | Some _ | None -> (
+        (* `[[foo.tree]]` where `foo.tree.md` states a different id. *)
+        match strip_tree_suffix target with
+        | None -> None
+        | Some stem -> (
+          match StringMap.find_opt stem index.by_filename with
+          | Some id when StringMap.mem id by_id -> Some id
+          | Some _ | None -> None)))
 
 let check_references index (doc : Parsed_document.t) (diags, resolution) =
   List.fold_left (fun (diags, resolution) (reference : Ir.reference) ->

@@ -285,7 +285,8 @@ let test_metadata_lower_tags () =
       ~base_byte:located.Tree_md.Metadata.span.Tree_md.Span.start_byte
   in
   let raw : Tree_md.Metadata.raw = {
-    Tree_md.Metadata.date = None;
+    Tree_md.Metadata.id = None;
+    date = None;
     taxon = None;
     authors = [];
     contributors = [];
@@ -325,7 +326,8 @@ let test_metadata_lower_meta () =
       ~base_byte:located.Tree_md.Metadata.span.Tree_md.Span.start_byte
   in
   let raw : Tree_md.Metadata.raw = {
-    Tree_md.Metadata.date = None;
+    Tree_md.Metadata.id = None;
+    date = None;
     taxon = None;
     authors = [];
     contributors = [];

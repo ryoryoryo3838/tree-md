@@ -196,8 +196,8 @@ This is the complete language reference. Anything not listed here is rejected.
 | File extension | Exactly `.tree.md` |
 | Encoding | UTF-8, **no BOM** (a leading BOM is `TM003`) |
 | Discovery | Recursive; symlinks are not followed; paths with a dot-leading component are ignored |
-| Output path | Directory structure is mirrored — `trees-md/a/foo.tree.md` becomes `generated/a/foo.tree` |
-| Tree identity | The **filename stem** (`foo`), never the path (`a/foo`). Duplicate stems anywhere in the forest are an error |
+| Output path | Directory structure is mirrored, and the file is named by the identity — `trees-md/a/foo.tree.md` becomes `generated/a/foo.tree`, or `generated/a/mlnet-7.tree` if it states `id: mlnet-7` |
+| Tree identity | The `id` in front matter, or the **filename stem** (`foo`) if it states none — never the path (`a/foo`). Duplicate identities anywhere in the forest are an error |
 
 ## Front matter
 
@@ -206,6 +206,7 @@ file, delimited by `---`.
 
 | Markdown front matter | Forester output |
 | --- | --- |
+| `id: mlnet-7` | *(nothing)* — the tree's identity, see below |
 | `date: 2026-08-02` | `\date{2026-08-02}` |
 | `taxon: Note` | `\taxon{Note}` |
 | `authors: ["[[miya]]"]` | `\author{miya}` — a tree reference |
@@ -418,6 +419,30 @@ rendering of it.
 
 An unresolvable target is `TM202`. There is no such thing as a dangling link
 that compiles.
+
+### Identity, and the file it came from
+
+A tree's identity is its `id` if it states one, and its file name otherwise. An
+identity is emitted nowhere: it names the `.tree` that is written, which is
+where Forester reads it from. So `id: mlnet-7` in `a/note.tree.md` produces
+`a/mlnet-7.tree` and is addressed as `mlnet-7`.
+
+Stating it is what lets the file be renamed — retitled, translated — without
+moving the address the published site and every existing reference use.
+
+The file name is then no longer the address, but it is still the search key: it
+is what Obsidian autocompletes and writes. So a reference may name the file
+instead, and it resolves to the identity:
+
+```markdown
+[[information-concept]]        →  [[mlnet-7]]
+[[information-concept.tree]]   →  [[mlnet-7]]
+[[mlnet-7]]                    →  [[mlnet-7]]
+![[information-concept]]       →  \transclude{mlnet-7}
+```
+
+Identities are tried before file names, so a tree whose `id` happens to match
+another tree's file name still wins.
 
 ### The `.tree` suffix rule
 

@@ -2,6 +2,9 @@ type 'a located = { value : 'a; span : Span.t }
 type attribution = Tree of string located | Literal of string located
 
 type raw = {
+  (* Compile-time only: the tree's identity, which Forester takes from the
+     file name of the .tree. Never emitted. *)
+  id : string located option;
   date : string located option;
   taxon : string located option;
   authors : attribution list;

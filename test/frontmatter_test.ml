@@ -465,6 +465,23 @@ let test_misspelled_meta_key () =
   | Ok _ -> Alcotest.fail "expected error for misspelled meta key"
   | Error diags -> expect_error diags "TM101"
 
+(* The identity may be stated rather than taken from the file name. *)
+let test_id_key () =
+  let t = parse_ok "id.md" ("---\nid: mlnet-7\ntaxon: Note\n---\n# Title\n") in
+  match t.Tree_md.Frontmatter.metadata.Tree_md.Metadata.id with
+  | Some located -> Alcotest.(check string) "id" "mlnet-7" located.Tree_md.Metadata.value
+  | None -> Alcotest.fail "expected an id"
+
+(* It still has to be a legal identity: it becomes a file name and a URL. *)
+let test_invalid_id_rejected () =
+  let source =
+    Result.get_ok (Tree_md.Source.of_string ~path:"badid.md"
+      "---\nid: \"not an id\"\n---\n# Title\n")
+  in
+  match Tree_md.Frontmatter.parse source with
+  | Ok _ -> Alcotest.fail "expected an invalid id to be rejected"
+  | Error diags -> expect_error diags "TM101"
+
 let () =
   let open Alcotest in
   run "Frontmatter"
@@ -489,4 +506,6 @@ let () =
     ; "promoted_meta_mixed", [ test_case "promoted_meta_mixed" `Quick test_promoted_meta_mixed ]
     ; "duplicate_meta_key", [ test_case "duplicate_meta_key" `Quick test_duplicate_meta_key ]
     ; "misspelled_meta_key", [ test_case "misspelled_meta_key" `Quick test_misspelled_meta_key ]
+    ; "id_key", [ test_case "id_key" `Quick test_id_key ]
+    ; "invalid_id_rejected", [ test_case "invalid_id_rejected" `Quick test_invalid_id_rejected ]
     ]
