@@ -5,6 +5,24 @@ type forest = {
   asset_roots : (Path_safe.relative * string) list;
 }
 
+type id_scheme = Sequential | Random
+
+type id_policy = {
+  alphabet : string;
+  width : int;
+  scheme : id_scheme;
+  prefix : string;
+}
+
+(* Forester's own convention, from its documentation: "NNNN is a four-digit
+   base-36 number … so that you are not tempted to rename it". *)
+let default_id_policy = {
+  alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  width = 4;
+  scheme = Sequential;
+  prefix = "";
+}
+
 type t = {
   path : string;
   directory : string;
@@ -12,6 +30,7 @@ type t = {
   source_roots : (Path_safe.relative * string) list;
   output_root : Path_safe.relative * string;
   target : string;
+  id : id_policy;
 }
 
 let ( let* ) = Result.bind
@@ -140,11 +159,80 @@ let load_forest forest_path =
   let* value = parse forest_path contents in
   decode_forest forest_path value
 
+(* Every character an address is built from has to be legal in one, and the
+   first has to be alphanumeric, because zero-padding puts it there. *)
+let id_char c =
+  (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+  || c = '.' || c = '_' || c = '-'
+
+let alnum c =
+  (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+
+let has_duplicate_chars s =
+  let seen = Array.make 256 false in
+  let rec loop i =
+    if i >= String.length s then false
+    else
+      let c = Char.code s.[i] in
+      if seen.(c) then true else (seen.(c) <- true; loop (i + 1))
+  in
+  loop 0
+
+let id_policy path fields =
+  match List.assoc_opt "id" fields with
+  | None -> Ok default_id_policy
+  | Some (Otoml.TomlTable id_fields | Otoml.TomlInlineTable id_fields) ->
+    let* () = check_closed path ["alphabet"; "width"; "scheme"; "prefix"] id_fields in
+    let field name default decode =
+      match List.assoc_opt name id_fields with
+      | None -> Ok default
+      | Some value -> decode value
+    in
+    let* alphabet =
+      field "alphabet" default_id_policy.alphabet (function
+        | Otoml.TomlString value ->
+          if value = "" then diagnostic path "id.alphabet must not be empty"
+          else if not (String.for_all id_char value) then
+            diagnostic path "id.alphabet may only use [A-Za-z0-9._-]"
+          else if not (alnum value.[0]) then
+            diagnostic path "id.alphabet must begin with an alphanumeric digit"
+          else if has_duplicate_chars value then
+            diagnostic path "id.alphabet repeats a digit"
+          else Ok value
+        | _ -> diagnostic path "id.alphabet must be a string")
+    in
+    let* width =
+      field "width" default_id_policy.width (function
+        | Otoml.TomlInteger value when value >= 1 -> Ok value
+        | Otoml.TomlInteger _ -> diagnostic path "id.width must be at least 1"
+        | _ -> diagnostic path "id.width must be an integer")
+    in
+    let* scheme =
+      field "scheme" default_id_policy.scheme (function
+        | Otoml.TomlString "sequential" -> Ok Sequential
+        | Otoml.TomlString "random" -> Ok Random
+        | Otoml.TomlString _ -> diagnostic path "id.scheme must be \"sequential\" or \"random\""
+        | _ -> diagnostic path "id.scheme must be a string")
+    in
+    let* prefix =
+      field "prefix" default_id_policy.prefix (function
+        | Otoml.TomlString "" -> Ok ""
+        | Otoml.TomlString value ->
+          if not (String.for_all id_char value) then
+            diagnostic path "id.prefix may only use [A-Za-z0-9._-]"
+          else if not (alnum value.[0]) then
+            diagnostic path "id.prefix must begin with a letter or digit"
+          else Ok value
+        | _ -> diagnostic path "id.prefix must be a string")
+    in
+    Ok { alphabet; width; scheme; prefix }
+  | Some _ -> diagnostic path "id must be a table"
+
 let load ~path =
   let* contents = read_file path in
   let* value = parse path contents in
   let* fields = table_fields path value in
-  let* () = check_closed path ["version"; "forest"; "sources"; "output"; "target"] fields in
+  let* () = check_closed path ["version"; "forest"; "sources"; "output"; "target"; "id"] fields in
   let* version = require_field path "version" fields in
   let* () =
     match version with
@@ -177,6 +265,7 @@ let load ~path =
     else check_source_output_overlap path source_roots (snd output_root)
   in
   let forest_path = Path_safe.resolve ~base:directory forest_reference in
+  let* id = id_policy path fields in
   let* forest = load_forest forest_path in
   let* () = check_output_tree path (snd output_root) forest.tree_roots in
   Ok {
@@ -186,4 +275,5 @@ let load ~path =
     source_roots;
     output_root;
     target;
+    id;
   }

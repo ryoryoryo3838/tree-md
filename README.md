@@ -236,6 +236,34 @@ order regardless of which spelling was used.
 **The key set is closed.** An unrecognized key is `TM101`, so a misspelling is
 reported rather than silently emitted.
 
+### Minting an address
+
+A tree that states no `id` is given one by `tree-md build`. The scheme follows
+the convention Forester documents for its own forests — a base-36 number,
+zero-padded to four digits — and is configurable:
+
+```toml
+[id]
+alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"  # base 36
+width    = 4          # minimum digits; a larger number simply takes more
+scheme   = "sequential"   # or "random", for a forest with several contributors
+prefix   = ""
+```
+
+The point of a number is that it says nothing, so nothing about the tree can
+make you want to change it. Forester's documentation puts it directly: the
+address exists "in such a way that you are not tempted to rename it, as you
+might be when titles or dates are embedded into file names".
+
+Human-readable addresses remain available and are worth using for the trees
+Forester's own docs single out — bibliographic and biographical ones. Just
+state the `id` and it is left alone; **an address that is written is never
+minted over**.
+
+The alphabet and prefix are checked when the config is read, so a policy that
+could mint something illegal as an identity is rejected there rather than
+part-way through a build.
+
 ### Front matter and thematic breaks
 
 When a document has front matter, a `---` line is consumed as the YAML closing

@@ -11,7 +11,7 @@ plus the `test/fixtures/compat` fixture.
 
 ## Full-suite status
 
-- 18 Alcotest suites, **486 tests, all passing** (`dune runtest`).
+- 19 Alcotest suites, **493 tests, all passing** (`dune runtest`).
 - Cram scenario `cli.t` runs under `dune runtest` and passes.
 - All 26 stable diagnostic codes (`TM001`–`TM500`) are exercised by at least
   one test (verified by code search; see the Diagnostics section).
@@ -45,6 +45,8 @@ plus the `test/fixtures/compat` fixture.
 | Paths relative to `tree-md.toml` directory; `forest.toml` paths relative to `forest.toml` | `config_test.ml` (`valid_path_bases`, `valid_nested_forest_path_bases`, `relative_operations`) |
 | Distinct source roots; output not overlapping a source root | `config_test.ml` (`duplicate_source_root`, `source_output_overlap`) |
 | Absolute/empty/`.`/`..` path rejection; output in `[forest].trees` | `config_test.ml` (`absolute_path`, `empty_segment`, `dot_segment`, `dot_dot_segment`, `backslash_path`, `output_absent_from_forest_trees`) |
+| `[id]` policy: defaults follow Forester's convention, overrides load, unusable alphabets/prefixes rejected | `config_test.ml` (`id_defaults`, `id_overrides`, `id_rejects_unusable_policy`) |
+| Minted addresses match the published Forester convention and are legal identities | `tree_id_test.ml` (`matches_forester_addresses`, `pads_and_widens`, `prefix_and_alphabet`, `result_is_a_valid_id`) |
 | Unsupported `target` is a configuration error | `cli.t/run.t` (`TM401` unsupported-target scenario, exit 2) |
 
 ### Source Discovery and Identity (lines 198–221)

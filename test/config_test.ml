@@ -184,6 +184,51 @@ let test_unknown_field () =
   with_temp_project (valid_tree_md ^ "extra = true\n") valid_forest (fun path ->
     expect_tm401 "unknown field" (Config.load ~path))
 
+(* No [id] section means Forester's own convention. *)
+let test_id_defaults () =
+  with_temp_project valid_tree_md valid_forest (fun path ->
+    match Config.load ~path with
+    | Error _ -> Alcotest.fail "expected the default id policy to load"
+    | Ok config ->
+      let id = config.Config.id in
+      Alcotest.(check string) "alphabet"
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" id.Config.alphabet;
+      Alcotest.(check int) "width" 4 id.Config.width;
+      Alcotest.(check string) "prefix" "" id.Config.prefix;
+      Alcotest.(check bool) "sequential" true (id.Config.scheme = Config.Sequential))
+
+let test_id_overrides () =
+  let contents =
+    valid_tree_md ^ "[id]\nalphabet = \"0123456789\"\nwidth = 3\n" ^
+    "scheme = \"random\"\nprefix = \"mlnet-\"\n"
+  in
+  with_temp_project contents valid_forest (fun path ->
+    match Config.load ~path with
+    | Error _ -> Alcotest.fail "expected the id policy to load"
+    | Ok config ->
+      let id = config.Config.id in
+      Alcotest.(check string) "alphabet" "0123456789" id.Config.alphabet;
+      Alcotest.(check int) "width" 3 id.Config.width;
+      Alcotest.(check string) "prefix" "mlnet-" id.Config.prefix;
+      Alcotest.(check bool) "random" true (id.Config.scheme = Config.Random))
+
+(* Whatever the policy mints has to be legal as an identity, so the alphabet
+   and prefix are checked when the config is read rather than when a build
+   trips over an unusable address. *)
+let test_id_rejects_unusable_policy () =
+  let case name body =
+    with_temp_project (valid_tree_md ^ body) valid_forest (fun path ->
+      expect_tm401 name (Config.load ~path))
+  in
+  case "alphabet with a space" "[id]\nalphabet = \"01 2\"\n";
+  case "alphabet starting non-alphanumeric" "[id]\nalphabet = \"-0123\"\n";
+  case "alphabet repeating a digit" "[id]\nalphabet = \"0120\"\n";
+  case "empty alphabet" "[id]\nalphabet = \"\"\n";
+  case "width below one" "[id]\nwidth = 0\n";
+  case "unknown scheme" "[id]\nscheme = \"lottery\"\n";
+  case "prefix starting with a dash" "[id]\nprefix = \"-x\"\n";
+  case "unknown id field" "[id]\nflavour = \"vanilla\"\n"
+
 let test_missing_field () =
   let contents =
     "version = 1\nforest = \"forest/forest.toml\"\n" ^
@@ -274,6 +319,9 @@ let () =
         test_case "missing_file" `Quick test_missing_file;
         test_case "wrong_version" `Quick test_wrong_version;
         test_case "unknown_field" `Quick test_unknown_field;
+        test_case "id_defaults" `Quick test_id_defaults;
+        test_case "id_overrides" `Quick test_id_overrides;
+        test_case "id_rejects_unusable_policy" `Quick test_id_rejects_unusable_policy;
         test_case "missing_field" `Quick test_missing_field;
         test_case "unsupported_target" `Quick test_unsupported_target;
         test_case "absolute_path" `Quick test_absolute_path;

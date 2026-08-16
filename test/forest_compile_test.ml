@@ -152,7 +152,7 @@ let make_config ~root =
      };
      source_roots = [ (relative "trees-md", resolve root "trees-md") ];
      output_root = (relative "generated", resolve root "generated");
-     target = Forester_6.target }
+     target = Forester_6.target; id = Config.default_id_policy }
     : Config.t)
 
 let with_temp_dir f =
