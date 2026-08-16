@@ -57,6 +57,10 @@ let block_node_to_string = function
     let parts = List.map (fun i -> node_to_string i.Tree_md.Ir.node) title in
     Printf.sprintf "Heading(%d)[%s]" level (String.concat " " parts)
   | Tree_md.Ir.Subtree_directive id -> Printf.sprintf "Subtree(%S)" id
+  | Tree_md.Ir.Subtree_open { level; id } ->
+    Printf.sprintf "SubtreeOpen(%d,%s)" level
+      (match id with Some i -> Printf.sprintf "%S" i | None -> "-")
+  | Tree_md.Ir.Subtree_close level -> Printf.sprintf "SubtreeClose(%d)" level
   | Tree_md.Ir.Block_embed id -> Printf.sprintf "Embed(%S)" id
   | Tree_md.Ir.Display_math tex -> Printf.sprintf "DisplayMath(%S)" tex
 
@@ -246,6 +250,78 @@ let test_subtree_directive () =
   | Error diags ->
     let msgs = List.map (fun d -> d.Tree_md.Diagnostic.message) diags |> String.concat "; " in
     Alcotest.fail ("expected Ok, got: " ^ msgs)
+
+(* ── Subtree open/close directives ── *)
+
+let directive_nodes text =
+  match parse text with
+  | Ok doc -> Ok (List.map (fun b -> block_node_to_string b.Tree_md.Ir.bnode) doc.blocks)
+  | Error diags ->
+    Error (List.map (fun d -> Tree_md.Diagnostic.code_string d.Tree_md.Diagnostic.code) diags)
+
+let check_nodes name expected text =
+  match directive_nodes text with
+  | Ok nodes -> Alcotest.(check (list string)) name expected nodes
+  | Error codes -> Alcotest.fail (name ^ ": unexpected " ^ String.concat "," codes)
+
+let check_rejected name text =
+  match directive_nodes text with
+  | Ok _ -> Alcotest.fail (name ^ ": expected a diagnostic")
+  | Error codes -> Alcotest.(check (list string)) name ["TM104"] codes
+
+let test_subtree_open_plain () =
+  check_nodes "open" ["SubtreeOpen(3,-)"] "<!-- h3 -->"
+
+let test_subtree_open_named () =
+  check_nodes "open named" ["SubtreeOpen(2,\"my.id\")"] "<!-- h2:my.id -->"
+
+let test_subtree_open_named_spaced () =
+  check_nodes "open named spaced" ["SubtreeOpen(2,\"my.id\")"] "<!-- h2 : my.id -->"
+
+let test_subtree_close () =
+  check_nodes "close" ["SubtreeClose(4)"] "<!-- /h4 -->"
+
+(* The annotating form used to require a space after the colon and silently
+   discarded the directive without it, losing the identifier. *)
+let test_subtree_directive_without_space () =
+  check_nodes "no space after colon" ["Subtree(\"my.id\")"] "<!-- subtree:my.id -->"
+
+let test_subtree_level_out_of_range () =
+  check_rejected "h1" "<!-- h1 -->";
+  check_rejected "h7" "<!-- h7 -->"
+
+(* A comment that names a directive but does not parse must not be discarded
+   along with ordinary comments: the emitted tree shape would change silently. *)
+let test_malformed_directive_rejected () =
+  check_rejected "uppercase" "<!-- H3 -->";
+  check_rejected "trailing text" "<!-- h3 nonsense -->";
+  check_rejected "empty id" "<!-- h3: -->";
+  check_rejected "close with id" "<!-- /h3:x -->";
+  check_rejected "close subtree word" "<!-- /subtree -->";
+  check_rejected "annotate without id" "<!-- subtree -->"
+
+let test_ordinary_comment_still_discarded () =
+  check_nodes "prose comment" [] "<!-- hello, this is a note -->";
+  check_nodes "colon comment" [] "<!-- TODO: fix this -->";
+  check_nodes "subtree prefix word" [] "<!-- subtrees are nice -->"
+
+let test_directive_in_container_rejected () =
+  check_rejected "inside list item" "- item\n\n  <!-- h2 -->\n"
+
+let test_empty_heading_rejected () =
+  match directive_nodes "##" with
+  | Ok _ -> Alcotest.fail "expected a diagnostic for an empty heading"
+  | Error codes -> Alcotest.(check (list string)) "empty heading" ["TM103"] codes
+
+(* Seven or more "#" is a paragraph in CommonMark, so the heading silently
+   became body text with its hashes escaped into the output. *)
+let test_seven_hashes_rejected () =
+  match directive_nodes "####### Deep" with
+  | Ok _ -> Alcotest.fail "expected a diagnostic for a seven-hash run"
+  | Error codes -> Alcotest.(check (list string)) "seven hashes" ["TM103"] codes
+
+let test_escaped_hashes_still_a_paragraph () =
+  check_nodes "escaped" ["Paragraph[Text(\"####### Deep\")]"] "\\####### Deep"
 
 let test_subtree_directive_invalid_id () =
   match parse "<!-- subtree: bad id -->" with
@@ -542,6 +618,18 @@ let () =
     ; "comment_discarded", [ test_case "comment_discarded" `Quick test_comment_discarded ]
     ; "subtree_directive", [ test_case "subtree_directive" `Quick test_subtree_directive ]
     ; "subtree_directive_invalid_id", [ test_case "subtree_directive_invalid_id" `Quick test_subtree_directive_invalid_id ]
+    ; "subtree_open_plain", [ test_case "subtree_open_plain" `Quick test_subtree_open_plain ]
+    ; "subtree_open_named", [ test_case "subtree_open_named" `Quick test_subtree_open_named ]
+    ; "subtree_open_named_spaced", [ test_case "subtree_open_named_spaced" `Quick test_subtree_open_named_spaced ]
+    ; "subtree_close", [ test_case "subtree_close" `Quick test_subtree_close ]
+    ; "subtree_directive_without_space", [ test_case "subtree_directive_without_space" `Quick test_subtree_directive_without_space ]
+    ; "subtree_level_out_of_range", [ test_case "subtree_level_out_of_range" `Quick test_subtree_level_out_of_range ]
+    ; "malformed_directive_rejected", [ test_case "malformed_directive_rejected" `Quick test_malformed_directive_rejected ]
+    ; "ordinary_comment_still_discarded", [ test_case "ordinary_comment_still_discarded" `Quick test_ordinary_comment_still_discarded ]
+    ; "directive_in_container_rejected", [ test_case "directive_in_container_rejected" `Quick test_directive_in_container_rejected ]
+    ; "empty_heading_rejected", [ test_case "empty_heading_rejected" `Quick test_empty_heading_rejected ]
+    ; "seven_hashes_rejected", [ test_case "seven_hashes_rejected" `Quick test_seven_hashes_rejected ]
+    ; "escaped_hashes_still_a_paragraph", [ test_case "escaped_hashes_still_a_paragraph" `Quick test_escaped_hashes_still_a_paragraph ]
     ; "embed_normalization", [ test_case "embed_normalization" `Quick test_embed_normalization ]
     ; "display_math_normalization", [ test_case "display_math_normalization" `Quick test_display_math_normalization ]
     ; "raw_html_block_rejected", [ test_case "raw_html_block_rejected" `Quick test_raw_html_block_rejected ]

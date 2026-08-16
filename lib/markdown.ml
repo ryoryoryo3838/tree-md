@@ -436,30 +436,121 @@ let code_block_lines lines =
   let strings = List.map (fun (s, _layout) -> s) lines in
   String.concat "\n" strings
 
-(* Check if an HTML comment is a subtree directive.
-   Only matches exact <!-- subtree: ID --> and returns the ID.
-   Space before/after the colon is flexible, but the marker must
-   be exactly "subtree". *)
-let is_subtree_directive comment_text =
-  let s = comment_text in
-  (* Must be non-empty and look like a comment *)
-  if String.length s < 10 then None
+(* ── Structural directives written as HTML comments ──
+
+   Markdown headings can only express a *titled* section that runs until the
+   next heading of the same or a lower level.  Two Forester shapes have no
+   heading equivalent: a subtree with no \title, and returning to a parent's
+   body after a child subtree has ended.  Three comment forms cover them:
+
+     <!-- subtree: ID -->  attach ID to the heading that follows
+     <!-- h3 -->           open an untitled level-3 subtree
+     <!-- h3:ID -->        open an untitled level-3 subtree named ID
+     <!-- /h3 -->          close every open subtree at level 3 or deeper
+
+   The level is written on both the opening and the closing form so that a
+   directive-delimited subtree slots into the same level stack that headings
+   already build; nothing can cross, and a closing directive is only ever
+   needed when you want to write more of the parent's body. *)
+
+type directive =
+  | Dir_annotate of string
+  | Dir_open of { level : int; id : string option }
+  | Dir_close of int
+
+let is_comment s =
+  String.length s >= 7
+  && String.sub s 0 4 = "<!--"
+  && String.sub s (String.length s - 3) 3 = "-->"
+
+let comment_inner s = String.trim (String.sub s 4 (String.length s - 7))
+
+(* The leading run of characters that is neither whitespace nor the ':' that
+   introduces an identifier. *)
+let leading_token s =
+  let n = String.length s in
+  let rec loop i =
+    if i >= n then i
+    else match s.[i] with ' ' | '\t' | ':' -> i | _ -> loop (i + 1)
+  in
+  String.sub s 0 (loop 0)
+
+let all_digits_after_first t =
+  let ok = ref true in
+  String.iteri (fun i c -> if i > 0 && not (c >= '0' && c <= '9') then ok := false) t;
+  !ok
+
+(* "h3" -> Some 3.  Deliberately strict: int_of_string would also accept
+   "0x2" and "3_0". *)
+let level_of_token t =
+  if String.length t >= 2 && t.[0] = 'h' && all_digits_after_first t then
+    int_of_string_opt (String.sub t 1 (String.length t - 1))
+  else None
+
+(* Close enough to a directive that a typo must be reported rather than
+   silently discarded along with ordinary comments. *)
+let looks_like_level_token t =
+  String.length t >= 2
+  && (t.[0] = 'h' || t.[0] = 'H')
+  && all_digits_after_first t
+
+(* [Ok None] is an ordinary comment, to be discarded.  [Error msg] is a
+   comment that names a directive but does not parse; discarding those would
+   change the shape of the emitted tree with nothing to show for it. *)
+let parse_directive inner =
+  let s = String.trim inner in
+  if s = "" then Ok None
   else
-    let body = String.trim s in
-    (* Check for <!-- ... --> if preserved, or just the inner text *)
-    let inner =
-      if String.length body >= 7
-         && String.sub body 0 4 = "<!--"
-         && String.sub body (String.length body - 3) 3 = "-->"
-      then String.trim (String.sub body 4 (String.length body - 7))
-      else body
+    let is_close = s.[0] = '/' in
+    let rest =
+      if is_close then String.trim (String.sub s 1 (String.length s - 1)) else s
     in
-    let words = String.split_on_char ' ' inner
-                |> List.filter (fun w -> w <> "") in
-    match words with
-    | "subtree:" :: rest ->
-      Some (String.concat " " rest |> String.trim)
-    | _ -> None
+    let tok = leading_token rest in
+    let tail =
+      String.trim
+        (String.sub rest (String.length tok) (String.length rest - String.length tok))
+    in
+    if not (tok = "subtree" || looks_like_level_token tok) then Ok None
+    else
+      let id =
+        if tail = "" then Ok None
+        else if tail.[0] = ':' then
+          let v = String.trim (String.sub tail 1 (String.length tail - 1)) in
+          if v = "" then Error "subtree directive identifier is empty" else Ok (Some v)
+        else Error (Printf.sprintf "unexpected text after \"%s\" in subtree directive" tok)
+      in
+      match id with
+      | Error m -> Error m
+      | Ok id ->
+        if tok = "subtree" then
+          if is_close then Error "use <!-- /hN --> to close a subtree"
+          else
+            match id with
+            | Some v -> Ok (Some (Dir_annotate v))
+            | None -> Error "<!-- subtree: ID --> requires an identifier"
+        else
+          match level_of_token tok with
+          | None ->
+            Error
+              (Printf.sprintf
+                 "unknown subtree directive \"%s\"; write the level in lowercase, h2 to h6"
+                 tok)
+          | Some level when level < 2 ->
+            Error
+              (Printf.sprintf
+                 "subtree levels are h2 to h6 (found h%d); h1 is the document root"
+                 level)
+          | Some level when level > 6 ->
+            Error
+              (Printf.sprintf
+                 "subtree levels are h2 to h6 (found h%d); deeper nesting needs a separate tree"
+                 level)
+          | Some level ->
+            if is_close then
+              match id with
+              | Some _ -> Error "a closing subtree directive takes no identifier"
+              | None -> Ok (Some (Dir_close level))
+            else Ok (Some (Dir_open { level; id }))
 
 (* Lower a single inline list, then check for paragraph normalization.
    Returns either a block_node (Paragraph, Embed, or Display_math)
@@ -550,8 +641,15 @@ let rec lower_blocks source_path depth defs block acc_blocks acc_diags =
       let inlines_rev, diags = lower_inlines source_path 0 defs inline [] [] in
       let all_diags = acc_diags @ diags in
       let title = filter_wiki_wrappers (List.rev inlines_rev) in
-      let node = Ir.Heading { level; title } in
-      ({ Ir.bnode = node; bspan = span } :: acc_blocks, all_diags)
+      if title = [] then
+        (* An empty heading used to compile to \title{}, which is a titled
+           subtree whose title happens to be blank, not an untitled one. *)
+        let diag = Diagnostic.make TM103 (Span.Source_span span)
+          "heading has no text; use <!-- hN --> to open an untitled subtree" in
+        (acc_blocks, diag :: all_diags)
+      else
+        let node = Ir.Heading { level; title } in
+        ({ Ir.bnode = node; bspan = span } :: acc_blocks, all_diags)
 
   | Cmarkit.Block.Block_quote (bq, bq_meta) ->
     let span = meta_span source_path 0 bq_meta in
@@ -646,20 +744,30 @@ let rec lower_blocks source_path depth defs block acc_blocks acc_diags =
     let span = meta_span source_path 0 hb_meta in
     let hb_text = code_block_lines hb in
     let trimmed = String.trim hb_text in
-    if String.length trimmed >= 7
-       && String.sub trimmed 0 4 = "<!--"
-       && String.sub trimmed (String.length trimmed - 3) 3 = "-->"
-    then
-      (match is_subtree_directive trimmed with
-       | Some id when Metadata.valid_id id ->
-         let node = Ir.Subtree_directive id in
-         ({ Ir.bnode = node; bspan = span } :: acc_blocks, acc_diags)
-       | Some id ->
-         let diag = Diagnostic.make TM104 (Span.Source_span span)
-           ("invalid subtree directive ID: \"" ^ id ^ "\"") in
-         (acc_blocks, diag :: acc_diags)
-       | None ->
-         (acc_blocks, acc_diags))
+    if is_comment trimmed then
+      let reject msg =
+        (acc_blocks, Diagnostic.make TM104 (Span.Source_span span) msg :: acc_diags)
+      in
+      let keep node = ({ Ir.bnode = node; bspan = span } :: acc_blocks, acc_diags) in
+      let check_id id k =
+        if Metadata.valid_id id then k ()
+        else reject ("invalid subtree directive ID: \"" ^ id ^ "\"")
+      in
+      (match parse_directive (comment_inner trimmed) with
+       | Ok None -> (acc_blocks, acc_diags)
+       | Error msg -> reject msg
+       (* Outline.build only walks the document's own block list, so a
+          directive buried in a list item or block quote would vanish
+          without a trace. *)
+       | Ok (Some _) when depth > 0 ->
+         reject "subtree directives are only allowed at document level"
+       | Ok (Some (Dir_annotate id)) ->
+         check_id id (fun () -> keep (Ir.Subtree_directive id))
+       | Ok (Some (Dir_open { level; id = Some id })) ->
+         check_id id (fun () -> keep (Ir.Subtree_open { level; id = Some id }))
+       | Ok (Some (Dir_open { level; id = None })) ->
+         keep (Ir.Subtree_open { level; id = None })
+       | Ok (Some (Dir_close level)) -> keep (Ir.Subtree_close level))
     else
       let diag = Diagnostic.make TM102 (Span.Source_span span)
         "raw block HTML is not supported" in
@@ -689,6 +797,29 @@ let rec lower_blocks source_path depth defs block acc_blocks acc_diags =
       "unsupported Markdown block extension" in
     (acc_blocks, diag :: acc_diags)
 
+(* CommonMark stops at six levels: a run of seven or more "#" is not a heading
+   at all but an ordinary paragraph, so a heading nested one level too deep
+   turns into body text with its hashes escaped into the output and nothing
+   said about it.  The check reads the source rather than the lowered inlines
+   so that an intentionally escaped "\#######" is not mistaken for it. *)
+let atx_overflow text (b : Ir.block) =
+  match b.Ir.bnode with
+  | Ir.Paragraph _ ->
+    let n = String.length text in
+    let start = b.Ir.bspan.Span.start_byte in
+    let rec run i = if i < n && text.[i] = '#' then run (i + 1) else i in
+    let stop = if start < n then run start else start in
+    let hashes = stop - start in
+    if hashes >= 7 && (stop >= n || text.[stop] = ' ' || text.[stop] = '\t') then
+      Some
+        (Diagnostic.make TM103 (Span.Source_span b.Ir.bspan)
+           (Printf.sprintf
+              "a run of %d \"#\" does not start a heading; Markdown headings stop at h6, \
+               so deeper nesting needs a separate tree"
+              hashes))
+    else None
+  | _ -> None
+
 (* parse: lower a complete Markdown document. *)
 let parse source ~masked_markdown raw_metadata =
   let doc =
@@ -700,6 +831,9 @@ let parse source ~masked_markdown raw_metadata =
   let path = Source.path source in
   let blocks_rev, block_diags = lower_blocks path 0 defs block [] [] in
   let blocks = List.rev blocks_rev in
+  let block_diags =
+    List.filter_map (atx_overflow masked_markdown) blocks @ block_diags
+  in
   let text_len = String.length masked_markdown in
   let doc_span =
     match Span.make ~path ~start_byte:0 ~end_byte:text_len with

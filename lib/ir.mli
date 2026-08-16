@@ -30,6 +30,8 @@ and block_node =
   | Thematic_break
   | Heading of { level : int; title : inline list }
   | Subtree_directive of string
+  | Subtree_open of { level : int; id : string option }
+  | Subtree_close of int
   | Block_embed of string
   | Display_math of string
 

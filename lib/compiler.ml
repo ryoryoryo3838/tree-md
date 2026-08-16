@@ -44,14 +44,12 @@ and collect_block_refs blocks acc_refs acc_assets =
     | _ -> (refs, assets)
   ) (acc_refs, acc_assets) blocks
 
-and collect_section_refs (sections : Outline.section list) acc_refs acc_assets =
-  List.fold_left (fun (refs, assets) (sec : Outline.section) ->
-    let refs', assets' = collect_block_refs sec.Outline.body refs assets in
-    let refs'', assets'' =
-      collect_section_refs sec.Outline.children refs' assets'
-    in
-    (refs'', assets'')
-  ) (acc_refs, acc_assets) sections
+and collect_content_refs (items : Outline.content list) acc_refs acc_assets =
+  List.fold_left (fun (refs, assets) item ->
+    match item with
+    | Outline.Block b -> collect_block_refs [b] refs assets
+    | Outline.Section sec -> collect_content_refs sec.Outline.content refs assets
+  ) (acc_refs, acc_assets) items
 
 let collect_meta_refs (meta : Ir.inline list Metadata.t) =
   let from_attributions kind attrs =
@@ -82,12 +80,9 @@ let parse ~root_id source =
         Error (List.sort Diagnostic.compare ol_diags)
       | Ok tree ->
         let defs = Outline.definitions tree in
-        let body_refs, body_assets = collect_block_refs tree.Outline.body [] [] in
-        let section_refs, section_assets =
-          collect_section_refs tree.Outline.sections [] [] in
+        let content_refs, assets = collect_content_refs tree.Outline.content [] [] in
         let meta_refs = collect_meta_refs meta in
-        let refs = meta_refs @ body_refs @ section_refs in
-        let assets = body_assets @ section_assets in
+        let refs = meta_refs @ content_refs in
         Ok {
           Parsed_document.outline = tree;
           definitions = defs;

@@ -248,6 +248,9 @@ delimiter, so `---` inside the body is *not* a thematic break. Use `***` or
 | `# Title` as the **first block** | root `\title{Title}` |
 | `##` – `######` | nested `\subtree{ \title{...} ... }` |
 | `<!-- subtree: ID -->` before a heading | named `\subtree[ID]{ ... }` |
+| `<!-- h3 -->` | untitled `\subtree{ ... }` at level 3 |
+| `<!-- h3:ID -->` | untitled, named `\subtree[ID]{ ... }` at level 3 |
+| `<!-- /h3 -->` | closes every open subtree at level 3 or deeper |
 | no H1 present | `\title` falls back to the filename stem |
 
 Heading levels nest the way you would expect: an `##` opens a subtree, a
@@ -274,9 +277,13 @@ sibling.
 \subtree{\title{Section B}}
 ```
 
+A heading must have text. Markdown headings stop at six levels, so a run of
+seven or more `#` is a paragraph, not a heading — both are errors rather than
+silent changes of shape.
+
 ### Stable subtree identifiers
 
-An anonymous `\subtree` has no addressable name. To link to a section, give it
+A `\subtree` with no ID has no addressable name. To link to a section, give it
 a stable ID with a directive comment on the line before the heading:
 
 ```markdown
@@ -291,9 +298,73 @@ a stable ID with a directive comment on the line before the heading:
 }
 ```
 
-The grammar is exactly `<!-- subtree: ID -->`, with ASCII spaces. IDs match
-`[A-Za-z0-9][A-Za-z0-9._-]*`. A directive must be immediately followed by a
-heading; an orphan, duplicate, or malformed directive is an error.
+The grammar is `<!-- subtree: ID -->`. IDs match `[A-Za-z0-9][A-Za-z0-9._-]*`.
+A directive must be immediately followed by a heading; an orphan, duplicate, or
+malformed directive is an error.
+
+### Untitled subtrees, and returning to a parent's body
+
+Two shapes that Forester allows have no Markdown heading equivalent: a subtree
+with no `\title`, and content that follows a subtree while still belonging to
+its parent. Headings cannot express either, because a heading always carries a
+title and always runs until the next heading of the same or a lower level.
+Three directives cover the gap:
+
+```markdown
+# Root
+
+Intro.
+
+<!-- h2:aside -->
+
+An untitled subtree, named so that it can still be linked.
+
+<!-- h3 -->
+
+Untitled and unnamed, nested one level deeper.
+
+<!-- /h2 -->
+
+Back in the root body, after the subtree ended.
+```
+
+```tree
+\title{Root}
+\p{Intro.}
+
+\subtree[aside]{
+\p{An untitled subtree, named so that it can still be linked.}
+
+\subtree{
+\p{Untitled and unnamed, nested one level deeper.}
+}
+}
+
+\p{Back in the root body, after the subtree ended.}
+```
+
+Because the opening directive names its own level, a directive-delimited
+subtree slots into the same level stack that headings build: `<!-- h3 -->`
+closes any open level-3 or deeper subtree and opens a new one, exactly as
+`###` does. Nothing can cross, and the two forms mix freely.
+
+**The closing directive is optional.** Levels close on their own at the next
+heading or directive of the same or a lower level, and at the end of the file.
+Write `<!-- /hN -->` only when you want to write more of the parent's body
+afterwards; it also closes a subtree that a heading opened.
+
+| Rule | |
+| --- | --- |
+| Levels | `h2` through `h6`. `h1` is the document root |
+| Identifier | optional on the opening form, rejected on the closing form |
+| Placement | document level only, never inside a list or block quote |
+| Emptiness | an untitled subtree with no content is an error |
+| Closing | `<!-- /hN -->` with no open subtree at level *N* is an error |
+
+Ordinary comments are still discarded. A comment whose first word *looks* like
+one of these directives but does not parse — `<!-- H3 -->`, `<!-- h7 -->`,
+`<!-- /h3:x -->` — is an error, because silently dropping it would change the
+shape of the emitted tree with nothing to show for it.
 
 ## Inline elements
 
@@ -342,7 +413,7 @@ rendering of it.
 `[[target]]` resolves only against the known local identity index:
 
 - roots of generated trees (from your `.tree.md` files),
-- named subtrees (`<!-- subtree: ID -->`),
+- named subtrees (`<!-- subtree: ID -->` and `<!-- hN:ID -->`),
 - roots of handwritten `.tree` files in the forest.
 
 An unresolvable target is `TM202`. There is no such thing as a dangling link
@@ -413,7 +484,13 @@ errors, not warnings:
 | H1 anywhere except the first block; duplicate H1 | `TM103` |
 | Skipped heading levels (`##` directly to `####`) | `TM103` |
 | Headings nested inside a list item or block quote | `TM103` |
+| A heading with no text | `TM103` |
+| Seven or more `#`, which CommonMark reads as a paragraph | `TM103` |
 | Invalid, duplicate, or orphan subtree directives | `TM104` |
+| Subtree directives outside document level | `TM104` |
+| A subtree level outside `h2`–`h6` | `TM104` |
+| `<!-- /hN -->` with no open subtree at that level | `TM104` |
+| An untitled subtree with no content | `TM104` |
 | Malformed wiki link (`[[a\|b\|c]]`, invalid ID, empty alias) | `TM105` |
 | Embeds inside lists, block quotes, or mixed into a paragraph | `TM106` |
 | Display math inside lists, block quotes, or mixed into a paragraph | `TM107` |

@@ -33,6 +33,14 @@ let inline_text i = match i.Ir.node with Ir.Text s -> s | _ -> ""
 
 let title_texts title = List.map inline_text title
 
+(* The outline stores one ordered content list per tree; these recover the
+   block-only and subtree-only views the assertions below are written against. *)
+let rbody (t : Outline.t) = Outline.blocks t.Outline.content
+let rsecs (t : Outline.t) = Outline.subtrees t.Outline.content
+let sbody (s : Outline.section) = Outline.blocks s.Outline.content
+let schildren (s : Outline.section) = Outline.subtrees s.Outline.content
+let stitle (s : Outline.section) = Option.value ~default:[] s.Outline.title
+
 let span_at start_byte end_byte =
   match Span.make ~path:"test.md" ~start_byte ~end_byte with
   | Ok s -> s | Error _ -> failwith "cannot create span"
@@ -49,8 +57,8 @@ let test_h1_root_title () =
   | Ok tree ->
     Alcotest.(check string) "root_id" "test" tree.root_id;
     Alcotest.(check (list string)) "title" ["My Title"] (title_texts tree.title);
-    Alcotest.(check int) "empty body" 0 (List.length tree.body);
-    Alcotest.(check int) "no sections" 0 (List.length tree.sections);
+    Alcotest.(check int) "empty body" 0 (List.length (rbody tree));
+    Alcotest.(check int) "no sections" 0 (List.length (rsecs tree));
     Alcotest.(check int) "no definitions" 0 (List.length (Outline.definitions tree))
   | Error diags ->
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
@@ -65,8 +73,8 @@ let test_no_h1_fallback () =
     (match tree.title with
      | [{ Ir.node = Ir.Text "myfile"; _ }] -> ()
      | _ -> Alcotest.fail "expected root title 'myfile'");
-    Alcotest.(check int) "one body block" 1 (List.length tree.body);
-    Alcotest.(check int) "no sections" 0 (List.length tree.sections)
+    Alcotest.(check int) "one body block" 1 (List.length (rbody tree));
+    Alcotest.(check int) "no sections" 0 (List.length (rsecs tree))
   | Error diags ->
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
     Alcotest.fail ("expected Ok, got: " ^ msgs)
@@ -83,8 +91,8 @@ let test_h1_with_body_and_sections () =
   ]) with
   | Ok tree ->
     Alcotest.(check (list string)) "root title" ["Root"] (title_texts tree.title);
-    Alcotest.(check int) "one body block" 1 (List.length tree.body);
-    Alcotest.(check int) "two root sections" 2 (List.length tree.sections)
+    Alcotest.(check int) "one body block" 1 (List.length (rbody tree));
+    Alcotest.(check int) "two root sections" 2 (List.length (rsecs tree))
   | Error diags ->
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
     Alcotest.fail ("expected Ok, got: " ^ msgs)
@@ -99,18 +107,18 @@ let test_h2_h3_h3_h2 () =
     heading 2 "D";
   ]) with
   | Ok tree ->
-    Alcotest.(check int) "two root sections" 2 (List.length tree.sections);
-    (match tree.sections with
+    Alcotest.(check int) "two root sections" 2 (List.length (rsecs tree));
+    (match (rsecs tree) with
      | [s1; s2] ->
-       Alcotest.(check (list string)) "s1 title" ["A"] (title_texts s1.title);
-       Alcotest.(check int) "s1 has 2 children" 2 (List.length s1.children);
-       (match s1.children with
+       Alcotest.(check (list string)) "s1 title" ["A"] (title_texts (stitle s1));
+       Alcotest.(check int) "s1 has 2 children" 2 (List.length (schildren s1));
+       (match (schildren s1) with
         | [c1; c2] ->
-          Alcotest.(check (list string)) "c1 title" ["B"] (title_texts c1.title);
-          Alcotest.(check (list string)) "c2 title" ["C"] (title_texts c2.title)
+          Alcotest.(check (list string)) "c1 title" ["B"] (title_texts (stitle c1));
+          Alcotest.(check (list string)) "c2 title" ["C"] (title_texts (stitle c2))
         | _ -> Alcotest.fail "expected 2 children");
-       Alcotest.(check (list string)) "s2 title" ["D"] (title_texts s2.title);
-       Alcotest.(check int) "s2 has 0 children" 0 (List.length s2.children)
+       Alcotest.(check (list string)) "s2 title" ["D"] (title_texts (stitle s2));
+       Alcotest.(check int) "s2 has 0 children" 0 (List.length (schildren s2))
      | _ -> Alcotest.fail "expected 2 sections")
   | Error diags ->
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
@@ -129,19 +137,19 @@ let test_body_attachment () =
     para "end";
   ]) with
   | Ok tree ->
-    Alcotest.(check int) "two root sections" 2 (List.length tree.sections);
-    (match tree.sections with
+    Alcotest.(check int) "two root sections" 2 (List.length (rsecs tree));
+    (match (rsecs tree) with
      | [s1; s2] ->
        (* s1 body has "intro" before child section *)
-       Alcotest.(check int) "s1 body 1 block" 1 (List.length s1.body);
-       Alcotest.(check int) "s1 has 1 child" 1 (List.length s1.children);
-       (match s1.children with
+       Alcotest.(check int) "s1 body 1 block" 1 (List.length (sbody s1));
+       Alcotest.(check int) "s1 has 1 child" 1 (List.length (schildren s1));
+       (match (schildren s1) with
         | [c] ->
-          Alcotest.(check (list string)) "child title" ["B"] (title_texts c.title);
-          Alcotest.(check int) "child body 2 blocks" 2 (List.length c.body)
+          Alcotest.(check (list string)) "child title" ["B"] (title_texts (stitle c));
+          Alcotest.(check int) "child body 2 blocks" 2 (List.length (sbody c))
         | _ -> Alcotest.fail "expected 1 child");
-       Alcotest.(check (list string)) "s2 title" ["C"] (title_texts s2.title);
-       Alcotest.(check int) "s2 body 1 block" 1 (List.length s2.body)
+       Alcotest.(check (list string)) "s2 title" ["C"] (title_texts (stitle s2));
+       Alcotest.(check int) "s2 body 1 block" 1 (List.length (sbody s2))
      | _ -> Alcotest.fail "expected 2 sections")
   | Error diags ->
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
@@ -157,11 +165,11 @@ let test_same_level_closes () =
     para "b1";
   ]) with
   | Ok tree ->
-    Alcotest.(check int) "two sections" 2 (List.length tree.sections);
-    (match tree.sections with
+    Alcotest.(check int) "two sections" 2 (List.length (rsecs tree));
+    (match (rsecs tree) with
      | [s1; s2] ->
-       Alcotest.(check int) "s1 body" 1 (List.length s1.body);
-       Alcotest.(check int) "s2 body" 1 (List.length s2.body)
+       Alcotest.(check int) "s1 body" 1 (List.length (sbody s1));
+       Alcotest.(check int) "s2 body" 1 (List.length (sbody s2))
      | _ -> Alcotest.fail "expected 2 sections")
   | Error diags ->
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
@@ -177,11 +185,11 @@ let test_shallower_closes_deeper () =
     heading 2 "C";
   ]) with
   | Ok tree ->
-    Alcotest.(check int) "two root sections" 2 (List.length tree.sections);
-    (match tree.sections with
+    Alcotest.(check int) "two root sections" 2 (List.length (rsecs tree));
+    (match (rsecs tree) with
      | [s1; s2] ->
-       Alcotest.(check int) "s1 has 1 child" 1 (List.length s1.children);
-       Alcotest.(check (list string)) "s2 title" ["C"] (title_texts s2.title)
+       Alcotest.(check int) "s1 has 1 child" 1 (List.length (schildren s1));
+       Alcotest.(check (list string)) "s2 title" ["C"] (title_texts (stitle s2))
      | _ -> Alcotest.fail "expected 2 sections")
   | Error diags ->
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
@@ -240,8 +248,8 @@ let test_directive_then_h2 () =
     heading 2 "Section";
   ]) with
   | Ok tree ->
-    Alcotest.(check int) "one section" 1 (List.length tree.sections);
-    (match tree.sections with
+    Alcotest.(check int) "one section" 1 (List.length (rsecs tree));
+    (match (rsecs tree) with
      | [s] ->
        Alcotest.(check (option string)) "named section" (Some "my.tree") s.id
      | _ -> Alcotest.fail "expected 1 section");
@@ -262,7 +270,7 @@ let test_directive_blank_h2 () =
     heading 2 "S";
   ]) with
   | Ok tree ->
-    (match tree.sections with
+    (match (rsecs tree) with
      | [s] ->
        Alcotest.(check (option string)) "named section" (Some "named") s.id
      | _ -> Alcotest.fail "expected 1 section")
@@ -313,9 +321,9 @@ let test_directive_on_h3 () =
     heading 3 "Child";
   ]) with
   | Ok tree ->
-    (match tree.sections with
+    (match (rsecs tree) with
      | [s] ->
-       (match s.children with
+       (match (schildren s) with
         | [c] ->
           Alcotest.(check (option string)) "named child" (Some "child.tree") c.id
         | _ -> Alcotest.fail "expected 1 child")
@@ -338,7 +346,7 @@ let test_multiple_definitions () =
     heading 2 "C";
   ]) with
   | Ok tree ->
-    Alcotest.(check int) "three sections" 3 (List.length tree.sections);
+    Alcotest.(check int) "three sections" 3 (List.length (rsecs tree));
     let defs = Outline.definitions tree in
     Alcotest.(check int) "three definitions" 3 (List.length defs);
     let ids = List.map (fun (d : Outline.definition) -> d.id) defs in
@@ -357,7 +365,7 @@ let test_definition_span_points_to_directive () =
     custom_heading 2 "S" h2_sp;
   ]) with
   | Ok tree ->
-    (match tree.sections with
+    (match (rsecs tree) with
      | [s] ->
        Alcotest.(check (option string)) "id matches" (Some "named") s.id;
        (match s.definition_span with
@@ -392,11 +400,11 @@ let test_section_span_covers_range () =
     custom_para "b1" p3_sp;
   ]) with
   | Ok tree ->
-    (match tree.sections with
+    (match (rsecs tree) with
      | [s1] ->
        Alcotest.(check int) "s1 span start" h2_sp.Span.start_byte s1.span.Span.start_byte;
        Alcotest.(check int) "s1 span end covers children" p3_sp.Span.end_byte s1.span.Span.end_byte;
-       (match s1.children with
+       (match (schildren s1) with
         | [c1] ->
           Alcotest.(check int) "c1 span start" h3_sp.Span.start_byte c1.span.Span.start_byte;
           Alcotest.(check int) "c1 span end" p3_sp.Span.end_byte c1.span.Span.end_byte
@@ -426,8 +434,8 @@ let test_empty_document () =
   match Outline.build ~root_id:"empty" (doc []) with
   | Ok tree ->
     Alcotest.(check (list string)) "fallback title" ["empty"] (title_texts tree.title);
-    Alcotest.(check int) "no body" 0 (List.length tree.body);
-    Alcotest.(check int) "no sections" 0 (List.length tree.sections)
+    Alcotest.(check int) "no body" 0 (List.length (rbody tree));
+    Alcotest.(check int) "no sections" 0 (List.length (rsecs tree))
   | Error diags ->
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
     Alcotest.fail ("expected Ok, got: " ^ msgs)
@@ -443,11 +451,11 @@ let test_h1_body_then_h2 () =
     para "section body";
   ]) with
   | Ok tree ->
-    Alcotest.(check int) "root body 2 blocks" 2 (List.length tree.body);
-    Alcotest.(check int) "one section" 1 (List.length tree.sections);
-    (match tree.sections with
+    Alcotest.(check int) "root body 2 blocks" 2 (List.length (rbody tree));
+    Alcotest.(check int) "one section" 1 (List.length (rsecs tree));
+    (match (rsecs tree) with
      | [s] ->
-       Alcotest.(check int) "section body 1 block" 1 (List.length s.body)
+       Alcotest.(check int) "section body 1 block" 1 (List.length (sbody s))
      | _ -> Alcotest.fail "expected 1 section")
   | Error diags ->
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
@@ -468,16 +476,16 @@ let test_non_heading_between_headings () =
     para "d_body";
   ]) with
   | Ok tree ->
-    (match tree.sections with
+    (match (rsecs tree) with
      | [s1; s2] ->
-       Alcotest.(check int) "s1 body 3 blocks" 3 (List.length s1.body);
-       Alcotest.(check int) "s1 2 children" 2 (List.length s1.children);
-       (match s1.children with
+       Alcotest.(check int) "s1 body 3 blocks" 3 (List.length (sbody s1));
+       Alcotest.(check int) "s1 2 children" 2 (List.length (schildren s1));
+       (match (schildren s1) with
         | [c1; c2] ->
-          Alcotest.(check int) "c1 body 1 block" 1 (List.length c1.body);
-          Alcotest.(check int) "c2 body 0 blocks" 0 (List.length c2.body)
+          Alcotest.(check int) "c1 body 1 block" 1 (List.length (sbody c1));
+          Alcotest.(check int) "c2 body 0 blocks" 0 (List.length (sbody c2))
         | _ -> Alcotest.fail "expected 2 children");
-       Alcotest.(check int) "s2 body 1 block" 1 (List.length s2.body)
+       Alcotest.(check int) "s2 body 1 block" 1 (List.length (sbody s2))
      | _ -> Alcotest.fail "expected 2 sections")
   | Error diags ->
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
@@ -527,6 +535,90 @@ let test_level_skip_h3_to_h5 () =
   | Error diags ->
     Alcotest.(check bool) "TM103" true (has_code diags "TM103")
 
+(* ── Subtree open/close directives ── *)
+
+let open_dir ?id level =
+  { Ir.bnode = Ir.Subtree_open { level; id }; Ir.bspan = zero_span }
+let close_dir level =
+  { Ir.bnode = Ir.Subtree_close level; Ir.bspan = zero_span }
+
+let build_ok blocks =
+  match Outline.build ~root_id:"t" (doc blocks) with
+  | Ok tree -> tree
+  | Error diags ->
+    let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
+    Alcotest.fail ("expected Ok, got: " ^ msgs)
+
+let build_err code blocks =
+  match Outline.build ~root_id:"t" (doc blocks) with
+  | Ok _ -> Alcotest.fail ("expected " ^ code)
+  | Error diags -> Alcotest.(check bool) code true (has_code diags code)
+
+let test_open_directive_untitled () =
+  let tree = build_ok [heading 1 "Root"; open_dir 2; para "body"] in
+  match rsecs tree with
+  | [s] ->
+    Alcotest.(check bool) "untitled" true (s.Outline.title = None);
+    Alcotest.(check int) "one block" 1 (List.length (sbody s))
+  | _ -> Alcotest.fail "expected 1 section"
+
+let test_open_directive_named_defines_id () =
+  let tree = build_ok [heading 1 "Root"; open_dir ~id:"sec" 2; para "body"] in
+  Alcotest.(check (list string)) "definition" ["sec"]
+    (List.map (fun (d : Outline.definition) -> d.Outline.id) (Outline.definitions tree))
+
+let test_open_directive_nests_by_level () =
+  let tree = build_ok [heading 1 "Root"; open_dir 2; para "a"; open_dir 3; para "b"] in
+  match rsecs tree with
+  | [s] ->
+    Alcotest.(check int) "one child" 1 (List.length (schildren s))
+  | _ -> Alcotest.fail "expected 1 section"
+
+(* Heading levels alone cannot return to a parent's body; a closing directive
+   ends the subtree and the blocks after it belong to the parent again. *)
+let test_close_returns_to_parent_body () =
+  let tree =
+    build_ok [heading 1 "Root"; open_dir 2; para "inside"; close_dir 2; para "outside"]
+  in
+  Alcotest.(check int) "root blocks" 1 (List.length (rbody tree));
+  Alcotest.(check int) "root sections" 1 (List.length (rsecs tree));
+  (* The order matters: the paragraph must follow the subtree, not precede it. *)
+  (match tree.Outline.content with
+   | [Outline.Section _; Outline.Block _] -> ()
+   | _ -> Alcotest.fail "expected section then block")
+
+let test_close_ends_heading_section () =
+  let tree =
+    build_ok [heading 1 "Root"; heading 2 "A"; para "inside"; close_dir 2; para "outside"]
+  in
+  match tree.Outline.content with
+  | [Outline.Section s; Outline.Block _] ->
+    Alcotest.(check (list string)) "title" ["A"] (title_texts (stitle s))
+  | _ -> Alcotest.fail "expected section then block"
+
+let test_close_shallower_pops_all () =
+  let tree =
+    build_ok [heading 1 "Root"; open_dir 2; para "a"; open_dir 3; para "b";
+              close_dir 2; para "outside"]
+  in
+  Alcotest.(check int) "root blocks" 1 (List.length (rbody tree));
+  Alcotest.(check int) "root sections" 1 (List.length (rsecs tree))
+
+let test_close_without_open_rejected () =
+  build_err "TM104" [heading 1 "Root"; close_dir 2]
+
+let test_close_deeper_than_open_rejected () =
+  build_err "TM104" [heading 1 "Root"; open_dir 2; para "a"; close_dir 4]
+
+let test_empty_untitled_subtree_rejected () =
+  build_err "TM104" [heading 1 "Root"; open_dir 2; close_dir 2]
+
+let test_open_directive_level_skip_rejected () =
+  build_err "TM103" [heading 1 "Root"; open_dir 4]
+
+let test_annotation_before_open_rejected () =
+  build_err "TM104" [heading 1 "Root"; directive "x"; open_dir 2; para "a"]
+
 (* ── Run ── *)
 
 let () =
@@ -567,5 +659,18 @@ let () =
         test_case "level_skip_h2_to_h4" `Quick test_level_skip_h2_to_h4;
         test_case "h3_without_h2" `Quick test_h3_without_h2;
         test_case "level_skip_h3_to_h5" `Quick test_level_skip_h3_to_h5;
+      ]
+    ; "subtree_directives", [
+        test_case "open_directive_untitled" `Quick test_open_directive_untitled;
+        test_case "open_directive_named_defines_id" `Quick test_open_directive_named_defines_id;
+        test_case "open_directive_nests_by_level" `Quick test_open_directive_nests_by_level;
+        test_case "close_returns_to_parent_body" `Quick test_close_returns_to_parent_body;
+        test_case "close_ends_heading_section" `Quick test_close_ends_heading_section;
+        test_case "close_shallower_pops_all" `Quick test_close_shallower_pops_all;
+        test_case "close_without_open_rejected" `Quick test_close_without_open_rejected;
+        test_case "close_deeper_than_open_rejected" `Quick test_close_deeper_than_open_rejected;
+        test_case "empty_untitled_subtree_rejected" `Quick test_empty_untitled_subtree_rejected;
+        test_case "open_directive_level_skip_rejected" `Quick test_open_directive_level_skip_rejected;
+        test_case "annotation_before_open_rejected" `Quick test_annotation_before_open_rejected;
       ]
     ]

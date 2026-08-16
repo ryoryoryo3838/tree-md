@@ -292,7 +292,7 @@ let rec emit_block (w : writer) buf (block : Ir.block) =
     Buffer.add_string buf "\\<html:hr>{}"
   | Ir.Heading { level = _; title = _ } ->
     ()
-  | Ir.Subtree_directive _ ->
+  | Ir.Subtree_directive _ | Ir.Subtree_open _ | Ir.Subtree_close _ ->
     ()
   | Ir.Block_embed id ->
     Buffer.add_string buf "\\transclude{";
@@ -460,17 +460,29 @@ let emit_title_command w buf (inlines : Ir.inline list) =
   emit_inlines w buf inlines;
   Buffer.add_char buf '}'
 
-let rec emit_sections (w : writer) buf (sections : Outline.section list) =
-  let rec loop first remaining =
-    match remaining with
-    | [] -> ()
-    | s :: rest ->
-      if not first then Buffer.add_char buf '\n';
-      emit_subtree w buf s;
-      Buffer.add_char buf '\n';
-      loop false rest
+(* Every item is followed by a newline; a blank line is inserted before an item
+   when it is separated from the one before it.  At the top level everything is
+   separated, inside a subtree only consecutive blocks are run together. *)
+let rec emit_content ~top (w : writer) buf (items : Outline.content list) =
+  let separated prev item =
+    top ||
+    match prev, item with
+    | Outline.Block _, Outline.Block _ -> false
+    | _ -> true
   in
-  loop true sections
+  let rec loop prev = function
+    | [] -> ()
+    | item :: rest ->
+      (match prev with
+       | Some p when separated p item -> Buffer.add_char buf '\n'
+       | _ -> ());
+      (match item with
+       | Outline.Block b -> emit_block w buf b
+       | Outline.Section s -> emit_subtree w buf s);
+      Buffer.add_char buf '\n';
+      loop (Some item) rest
+  in
+  loop None items
 
 and emit_subtree (w : writer) buf (sec : Outline.section) =
   Buffer.add_string buf "\\subtree";
@@ -481,20 +493,14 @@ and emit_subtree (w : writer) buf (sec : Outline.section) =
      Buffer.add_char buf ']'
    | None -> ());
   Buffer.add_string buf "{";
-  let has_content = sec.Outline.body <> [] || sec.Outline.children <> [] in
+  let has_content = sec.Outline.content <> [] in
   if has_content then Buffer.add_char buf '\n';
-  emit_title_command w buf sec.Outline.title;
-  if has_content then begin
-    Buffer.add_char buf '\n';
-    List.iter (fun b ->
-      emit_block w buf b;
-      Buffer.add_char buf '\n'
-    ) sec.Outline.body;
-    if sec.Outline.children <> [] then begin
-      if sec.Outline.body <> [] then Buffer.add_char buf '\n';
-      emit_sections w buf sec.Outline.children
-    end
-  end;
+  (match sec.Outline.title with
+   | Some title ->
+     emit_title_command w buf title;
+     if has_content then Buffer.add_char buf '\n'
+   | None -> ());
+  if has_content then emit_content ~top:false w buf sec.Outline.content;
   Buffer.add_char buf '}'
 
 (* ── Top-level block emission ── *)
@@ -530,15 +536,9 @@ let emit ~(resolution : Resolution.t) (tree : Outline.t) =
   in
   emit_metadata w buf tree.Outline.metadata;
 
-  let has_body = tree.Outline.body <> [] in
-  let has_sections = tree.Outline.sections <> [] in
-  if has_body || has_sections then begin
+  if tree.Outline.content <> [] then begin
     if has_meta then Buffer.add_char buf '\n';
-    if has_body then emit_blocks_top w buf tree.Outline.body;
-    if has_sections then begin
-      if has_body then Buffer.add_char buf '\n';
-      emit_sections w buf tree.Outline.sections
-    end
+    emit_content ~top:true w buf tree.Outline.content
   end;
 
   let out = Buffer.contents buf in
