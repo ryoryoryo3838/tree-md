@@ -245,7 +245,7 @@ external   slides        video   bibtex   author  toc     lang
 | --- | --- |
 | **先頭ブロック**としての `# Title` | ルートの `\title{Title}` |
 | `##` – `######` | 入れ子の `\subtree{ \title{...} ... }` |
-| 見出しの直前の `<!-- subtree: ID -->` | 名前付き `\subtree[ID]{ ... }` |
+| 見出しの直前の `<!-- subtree: ID -->` または `<!-- id: ID -->` | 名前付き `\subtree[ID]{ ... }` |
 | `<!-- h3 -->` | レベル 3 の無題な `\subtree{ ... }` |
 | `<!-- h3:ID -->` | レベル 3 の無題かつ名前付き `\subtree[ID]{ ... }` |
 | `<!-- /h3 -->` | レベル 3 以深の開いている subtree をすべて閉じる |

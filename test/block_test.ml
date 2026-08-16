@@ -346,6 +346,29 @@ let test_embed_normalization () =
     let msgs = List.map (fun d -> d.Tree_md.Diagnostic.message) diags |> String.concat "; " in
     Alcotest.fail ("expected Ok, got: " ^ msgs)
 
+(* `id` names a subtree just as it names a tree in front matter. Before it was
+   a directive it was an ordinary comment, so the name was silently lost. *)
+let test_id_directive () =
+  match parse "# Root\n\n<!-- id: my-sec -->\n## Named\n\nbody\n" with
+  | Ok doc ->
+    let named =
+      List.exists
+        (fun (b : Tree_md.Ir.block) ->
+          match b.Tree_md.Ir.bnode with
+          | Tree_md.Ir.Subtree_directive "my-sec" -> true
+          | _ -> false)
+        doc.Tree_md.Ir.blocks
+    in
+    Alcotest.(check bool) "id names the subtree" true named
+  | Error diags ->
+    let msgs = List.map (fun d -> d.Tree_md.Diagnostic.message) diags |> String.concat "; " in
+    Alcotest.fail ("expected Ok, got: " ^ msgs)
+
+let test_id_directive_needs_identifier () =
+  match parse_result "# Root\n\n<!-- id: -->\n## Named\n\nbody\n" with
+  | Ok _ -> Alcotest.fail "expected an empty id to be rejected"
+  | Error diags -> Alcotest.(check bool) "has TM104" true (has_diag_code diags "TM104")
+
 (* ── Obsidian subtree anchors ── *)
 
 let expect_blocks name text =
@@ -691,6 +714,8 @@ let () =
     ; "seven_hashes_rejected", [ test_case "seven_hashes_rejected" `Quick test_seven_hashes_rejected ]
     ; "escaped_hashes_still_a_paragraph", [ test_case "escaped_hashes_still_a_paragraph" `Quick test_escaped_hashes_still_a_paragraph ]
     ; "embed_normalization", [ test_case "embed_normalization" `Quick test_embed_normalization ]
+    ; "id_directive", [ test_case "id_directive" `Quick test_id_directive ]
+    ; "id_directive_needs_identifier", [ test_case "id_directive_needs_identifier" `Quick test_id_directive_needs_identifier ]
     ; "embed_subtree_anchor", [ test_case "embed_subtree_anchor" `Quick test_embed_subtree_anchor ]
     ; "link_subtree_anchor", [ test_case "link_subtree_anchor" `Quick test_link_subtree_anchor ]
     ; "same_note_anchor", [ test_case "same_note_anchor" `Quick test_same_note_anchor ]

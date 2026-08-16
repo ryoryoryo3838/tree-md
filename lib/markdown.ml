@@ -510,7 +510,7 @@ let parse_directive inner =
       String.trim
         (String.sub rest (String.length tok) (String.length rest - String.length tok))
     in
-    if not (tok = "subtree" || looks_like_level_token tok) then Ok None
+    if not (tok = "subtree" || tok = "id" || looks_like_level_token tok) then Ok None
     else
       let id =
         if tail = "" then Ok None
@@ -522,12 +522,12 @@ let parse_directive inner =
       match id with
       | Error m -> Error m
       | Ok id ->
-        if tok = "subtree" then
+        if tok = "subtree" || tok = "id" then
           if is_close then Error "use <!-- /hN --> to close a subtree"
           else
             match id with
             | Some v -> Ok (Some (Dir_annotate v))
-            | None -> Error "<!-- subtree: ID --> requires an identifier"
+            | None -> Error (Printf.sprintf "<!-- %s: ID --> requires an identifier" tok)
         else
           match level_of_token tok with
           | None ->
