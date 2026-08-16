@@ -2,11 +2,15 @@ open Tree_md
 
 let h64 c = String.make 64 c
 
+(* Resolved, because the workspace refuses an output root reached through a
+   symbolic link and macOS puts $TMPDIR under /var, which is a link to
+   /private/var. Every path here would carry that link and every test that
+   writes would fail for a reason that has nothing to do with what it tests. *)
 let tmpdir () =
   let name = Filename.temp_file "tree-md-test-" "" in
   Unix.unlink name;
   Unix.mkdir name 0o700;
-  name
+  Unix.realpath name
 
 let rec rm_rf path =
   try

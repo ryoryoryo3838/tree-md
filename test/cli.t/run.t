@@ -14,10 +14,11 @@ fixtures are available next to the cram directory.
   0.1.0
 
 --help documents the root command, its subcommands, and the exit codes.
+The format is named rather than left to `auto`, which renders through
+groff when a pager is around and through cmdliner's own formatter when
+one is not — two different-looking man pages for the same binary.
 
-  $ tree-md --help
-  TREE-MD(1)                      Tree-md Manual                      TREE-MD(1)
-  
+  $ tree-md --help=plain
   NAME
          tree-md - Compile strict Markdown into Forester tree source.
   
@@ -33,8 +34,8 @@ fixtures are available next to the cram directory.
   
   COMMON OPTIONS
          --help[=FMT] (default=auto)
-             Show  this  help  in format FMT. The value FMT must be one of auto,
-             pager, groff or plain. With auto, the  format  is  pager  or  plain
+             Show this help in format FMT. The value FMT must be one of auto,
+             pager, groff or plain. With auto, the format is pager or plain
              whenever the TERM env var is dumb or undefined.
   
          --version
@@ -45,13 +46,12 @@ fixtures are available next to the cram directory.
   
          0   on success; check also confirms a clean generated state.
   
-         1   on   source,   semantic,   forest-consistency,  or  generated-state
+         1   on source, semantic, forest-consistency, or generated-state
              diagnostics.
   
-         2   on  usage,  configuration,  manifest,  journal,  I/O,  or  internal
+         2   on usage, configuration, manifest, journal, I/O, or internal
              failure.
   
-  Tree-md 0.1.0                                                       TREE-MD(1)
 
 Usage errors (missing command, unknown command, unknown option) print
 cmdliner's usage text to stderr and exit 2. TERM=dumb keeps the error
