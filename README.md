@@ -248,7 +248,16 @@ alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"  # base 36
 width    = 4          # minimum digits; a larger number simply takes more
 scheme   = "sequential"   # or "random", for a forest with several contributors
 prefix   = ""
+mint     = "build"    # or "off", to have something else fulfil the requests
 ```
+
+An address is minted only where one is asked for — an `id:` with no value in
+front matter, or a bare `<!-- id -->` above a heading. A tree that says nothing
+keeps its file name, so turning this on moves no existing address.
+
+`mint = "off"` leaves the requests standing for another tool to fulfil. Which
+address to hand out stays here either way: a forest should have one scheme, not
+one per tool. Only the writing moves.
 
 The point of a number is that it says nothing, so nothing about the tree can
 make you want to change it. Forester's documentation puts it directly: the

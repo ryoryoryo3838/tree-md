@@ -11,11 +11,17 @@ type forest = {
    tempted to rename a tree the way they would one named after its title. *)
 type id_scheme = Sequential | Random
 
+(* Who fulfils a request for an address. Deciding what the address is stays
+   here whatever the answer, so that a forest has one scheme rather than one
+   per tool; only the writing moves. *)
+type id_minter = By_build | Off
+
 type id_policy = {
   alphabet : string;
   width : int;
   scheme : id_scheme;
   prefix : string;
+  mint : id_minter;
 }
 
 val default_id_policy : id_policy

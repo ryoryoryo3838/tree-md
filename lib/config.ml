@@ -7,11 +7,17 @@ type forest = {
 
 type id_scheme = Sequential | Random
 
+(* Who fulfils a request for an address. Deciding what the address is stays
+   here whatever the answer, so that a forest has one scheme rather than one
+   per tool; only the writing moves. *)
+type id_minter = By_build | Off
+
 type id_policy = {
   alphabet : string;
   width : int;
   scheme : id_scheme;
   prefix : string;
+  mint : id_minter;
 }
 
 (* Forester's own convention, from its documentation: "NNNN is a four-digit
@@ -21,6 +27,7 @@ let default_id_policy = {
   width = 4;
   scheme = Sequential;
   prefix = "";
+  mint = By_build;
 }
 
 type t = {
@@ -182,7 +189,7 @@ let id_policy path fields =
   match List.assoc_opt "id" fields with
   | None -> Ok default_id_policy
   | Some (Otoml.TomlTable id_fields | Otoml.TomlInlineTable id_fields) ->
-    let* () = check_closed path ["alphabet"; "width"; "scheme"; "prefix"] id_fields in
+    let* () = check_closed path ["alphabet"; "width"; "scheme"; "prefix"; "mint"] id_fields in
     let field name default decode =
       match List.assoc_opt name id_fields with
       | None -> Ok default
@@ -225,7 +232,14 @@ let id_policy path fields =
           else Ok value
         | _ -> diagnostic path "id.prefix must be a string")
     in
-    Ok { alphabet; width; scheme; prefix }
+    let* mint =
+      field "mint" default_id_policy.mint (function
+        | Otoml.TomlString "build" -> Ok By_build
+        | Otoml.TomlString "off" -> Ok Off
+        | Otoml.TomlString _ -> diagnostic path "id.mint must be \"build\" or \"off\""
+        | _ -> diagnostic path "id.mint must be a string")
+    in
+    Ok { alphabet; width; scheme; prefix; mint }
   | Some _ -> diagnostic path "id must be a table"
 
 let load ~path =

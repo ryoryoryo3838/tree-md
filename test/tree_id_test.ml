@@ -2,7 +2,7 @@ open Tree_md
 
 let policy ?(alphabet = Config.default_id_policy.Config.alphabet)
     ?(width = 4) ?(prefix = "") () =
-  { Config.alphabet; width; scheme = Config.Sequential; prefix }
+  { Config.alphabet; width; scheme = Config.Sequential; prefix; mint = Config.By_build }
 
 (* Checked against addresses the Forester documentation actually publishes:
    its own trees 0052 and 007H are 182 and 269 in base 36. *)

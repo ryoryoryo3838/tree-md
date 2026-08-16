@@ -195,12 +195,13 @@ let test_id_defaults () =
         "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" id.Config.alphabet;
       Alcotest.(check int) "width" 4 id.Config.width;
       Alcotest.(check string) "prefix" "" id.Config.prefix;
-      Alcotest.(check bool) "sequential" true (id.Config.scheme = Config.Sequential))
+      Alcotest.(check bool) "sequential" true (id.Config.scheme = Config.Sequential);
+      Alcotest.(check bool) "build mints" true (id.Config.mint = Config.By_build))
 
 let test_id_overrides () =
   let contents =
     valid_tree_md ^ "[id]\nalphabet = \"0123456789\"\nwidth = 3\n" ^
-    "scheme = \"random\"\nprefix = \"mlnet-\"\n"
+    "scheme = \"random\"\nprefix = \"mlnet-\"\nmint = \"off\"\n"
   in
   with_temp_project contents valid_forest (fun path ->
     match Config.load ~path with
@@ -210,7 +211,8 @@ let test_id_overrides () =
       Alcotest.(check string) "alphabet" "0123456789" id.Config.alphabet;
       Alcotest.(check int) "width" 3 id.Config.width;
       Alcotest.(check string) "prefix" "mlnet-" id.Config.prefix;
-      Alcotest.(check bool) "random" true (id.Config.scheme = Config.Random))
+      Alcotest.(check bool) "random" true (id.Config.scheme = Config.Random);
+      Alcotest.(check bool) "minting handed off" true (id.Config.mint = Config.Off))
 
 (* Whatever the policy mints has to be legal as an identity, so the alphabet
    and prefix are checked when the config is read rather than when a build
