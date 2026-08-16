@@ -13,7 +13,7 @@
 \p{Body text of named section with a [[wiki-link]] and a [standard link](https://example.test).}
 
 \subtree{
-\title{Anonymous Section}
+\title{Unnamed Section}
 \p{Tight list:}
 \ul{\li{alpha}
 \li{beta}}
@@ -32,5 +32,15 @@ here}}
 \p{hard\<html:br>{}break}
 \p{\<html:img>[src]{https://example.test/img.png}[alt]{External}{}}
 \p{\<html:img>[src]{\route-asset{assets/images/x.png}}[alt]{Plot}{}}
+}
+}
+
+\p{Back in the root body, after the named section closed.}
+
+\subtree[untitled-sec]{
+\p{An untitled subtree, named so that it can still be linked.}
+
+\subtree{
+\p{Untitled and unnamed, nested one level deeper.}
 }
 }

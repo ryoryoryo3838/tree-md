@@ -106,6 +106,42 @@ let emit_err ?(resolution=Resolution.empty) (t : Outline.t) =
 let lines s =
   String.split_on_char '\n' s
 
+(* ── Untitled subtrees and interleaved content ── *)
+
+let open_dir ?id level =
+  { Ir.bnode = Ir.Subtree_open { level; id }; Ir.bspan = zero_span }
+let close_dir level = { Ir.bnode = Ir.Subtree_close level; Ir.bspan = zero_span }
+
+(* Forester allows a subtree with no \title; a Markdown heading cannot express
+   one, so it is what the <!-- hN --> directive exists for. *)
+let test_untitled_subtree_omits_title () =
+  Alcotest.(check string) "no title command"
+    "\\title{Root}\n\\subtree{\n\\p{body}\n}\n"
+    (emit_str (outline_blocks "t"
+       [heading 1 [text_inline "Root"]; open_dir 2; para [text_inline "body"]]))
+
+let test_untitled_subtree_keeps_id () =
+  Alcotest.(check string) "id without title"
+    "\\title{Root}\n\\subtree[sec]{\n\\p{body}\n}\n"
+    (emit_str (outline_blocks "t"
+       [heading 1 [text_inline "Root"]; open_dir ~id:"sec" 2; para [text_inline "body"]]))
+
+(* The block after the closing directive must be emitted after the subtree, not
+   hoisted above it. *)
+let test_block_after_subtree_keeps_order () =
+  Alcotest.(check string) "order preserved"
+    "\\title{Root}\n\\subtree{\n\\p{inside}\n}\n\n\\p{outside}\n"
+    (emit_str (outline_blocks "t"
+       [heading 1 [text_inline "Root"]; open_dir 2; para [text_inline "inside"];
+        close_dir 2; para [text_inline "outside"]]))
+
+let test_nested_untitled_subtree () =
+  Alcotest.(check string) "nested"
+    "\\title{Root}\n\\subtree{\n\\p{a}\n\n\\subtree{\n\\p{b}\n}\n}\n"
+    (emit_str (outline_blocks "t"
+       [heading 1 [text_inline "Root"]; open_dir 2; para [text_inline "a"];
+        open_dir 3; para [text_inline "b"]]))
+
 (* ── Target string ── *)
 
 let test_target_string () =
@@ -773,6 +809,12 @@ let () =
         test_case "lf_normalization" `Quick test_lf_normalization;
         test_case "hostile_chars_in_paragraph" `Quick test_hostile_chars_in_paragraph;
         test_case "transclusion_no_extra_wrapper" `Quick test_transclusion_no_extra_wrapper;
+      ]
+    ; "untitled_subtrees", [
+        test_case "untitled_subtree_omits_title" `Quick test_untitled_subtree_omits_title;
+        test_case "untitled_subtree_keeps_id" `Quick test_untitled_subtree_keeps_id;
+        test_case "block_after_subtree_keeps_order" `Quick test_block_after_subtree_keeps_order;
+        test_case "nested_untitled_subtree" `Quick test_nested_untitled_subtree;
       ]
     ; "resolution", [
         test_case "resolution_empty" `Quick test_resolution_empty;

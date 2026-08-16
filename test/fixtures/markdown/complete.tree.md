@@ -19,7 +19,7 @@ This paragraph has **bold**, *italic*, and `code` spans.
 
 Body text of named section with a [[wiki-link]] and a [standard link](https://example.test).
 
-### Anonymous Section
+### Unnamed Section
 
 Tight list:
 - alpha
@@ -57,3 +57,15 @@ break
 ![External](https://example.test/img.png)
 
 ![Plot](images/x.png)
+
+<!-- /h2 -->
+
+Back in the root body, after the named section closed.
+
+<!-- h2:untitled-sec -->
+
+An untitled subtree, named so that it can still be linked.
+
+<!-- h3 -->
+
+Untitled and unnamed, nested one level deeper.
