@@ -349,12 +349,27 @@ let check_references index (doc : Parsed_document.t) (diags, resolution) =
     | Some (id, ambiguous) ->
       (ambiguity_warning ambiguous @ diags,
        Resolution.add_tree reference.span ~id resolution)
-    | None ->
+    | None -> (
       let kind = reference_kind_message reference.kind in
-      (Diagnostic.make TM202 (Span.Source_span reference.span)
-         ("unresolved " ^ kind ^ " \"" ^ reference.target ^ "\"")
-       :: diags,
-       resolution)
+      match reference.kind with
+      | Ir.Markdown_link ->
+        (* Only a wiki link is closed-world. A Markdown link was never checked
+           at all before, and a local destination may be a relative URL to
+           something the forest does not own, so one that does not resolve is
+           left exactly as written. A destination ending in `.md` can only have
+           meant a note, so that one is said out loud. *)
+        if strip_suffix md_suffix reference.target = None then (diags, resolution)
+        else
+          (Diagnostic.warn TM202 (Span.Source_span reference.span)
+             ("unresolved " ^ kind ^ " \"" ^ reference.target
+              ^ "\"; it is emitted as written, which names no tree")
+           :: diags,
+           resolution)
+      | Ir.Wiki | Ir.Embed | Ir.Attribution ->
+        (Diagnostic.make TM202 (Span.Source_span reference.span)
+           ("unresolved " ^ kind ^ " \"" ^ reference.target ^ "\"")
+         :: diags,
+         resolution))
   ) (diags, resolution) doc.Parsed_document.references
 
 let has_hidden_component path =

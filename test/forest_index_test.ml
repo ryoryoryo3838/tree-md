@@ -381,7 +381,11 @@ let test_markdown_link_resolves () =
         (Resolution.tree_id resolution
            (List.hd referring.Parsed_document.references).Ir.span))
 
-let test_markdown_link_unresolved_errors () =
+(* Only a wiki link is closed-world. A Markdown link was never checked at all
+   before, so an unresolvable one does not fail a build that used to pass: it
+   is emitted as written. A destination ending in `.md` can only have meant a
+   note, so that one warns. *)
+let test_markdown_link_unresolved_warns () =
   with_fixture (fun root ->
     let doc =
       parse_doc ~root_id:"a" ~path:(Filename.concat root "trees-md/a.tree.md")
@@ -389,7 +393,79 @@ let test_markdown_link_unresolved_errors () =
     in
     let index = expect_build "link index" ~handwritten:[] ~generated:[ doc ] in
     let forest = make_forest ~root ~asset_roots:["assets"] in
-    expect_code "unresolved markdown link" "TM202"
+    match Forest_index.resolve forest index ~documents:[ doc ] with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "an unresolved link failed" diagnostics)
+    | Ok (_results, warnings) ->
+      Alcotest.(check int) "one warning" 1 (List.length warnings);
+      Alcotest.(check bool) "a warning, not an error" false
+        (Diagnostic.has_error warnings))
+
+(* A forest legitimately writes a URL rooted at the site. It names no tree and
+   never did, so it is not offered to resolution at all. *)
+let test_root_relative_link_is_not_a_reference () =
+  with_fixture (fun root ->
+    let doc =
+      parse_doc ~root_id:"a" ~path:(Filename.concat root "trees-md/a.tree.md")
+        "# A\n\n[reset](/) and [feed](/index/index.xml)\n"
+    in
+    let index = expect_build "link index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match Forest_index.resolve forest index ~documents:[ doc ] with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "a site URL was rejected" diagnostics)
+    | Ok (_results, warnings) ->
+      Alcotest.(check int) "silent" 0 (List.length warnings))
+
+(* A relative destination that is not a note and does not resolve is left
+   alone: it may name something the forest does not own. *)
+let test_unresolved_non_note_link_is_silent () =
+  with_fixture (fun root ->
+    let doc =
+      parse_doc ~root_id:"a" ~path:(Filename.concat root "trees-md/a.tree.md")
+        "# A\n\n[paper](papers/2026.pdf)\n"
+    in
+    let index = expect_build "link index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match Forest_index.resolve forest index ~documents:[ doc ] with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "a relative URL was rejected" diagnostics)
+    | Ok (_results, warnings) ->
+      Alcotest.(check int) "silent" 0 (List.length warnings))
+
+(* A reference written in a heading used to be collected nowhere, so it was
+   never resolved and never checked. *)
+let test_reference_in_a_title_resolves () =
+  with_fixture (fun root ->
+    let referring =
+      parse_doc ~root_id:"a" ~path:(Filename.concat root "trees-md/a.tree.md")
+        "# A\n\n## See [[other]]\n"
+    in
+    let target =
+      parse_doc ~root_id:"OTH1" ~path:(Filename.concat root "trees-md/other.tree.md")
+        "# Other\n"
+    in
+    let documents = [ referring; target ] in
+    let index = expect_build "title index" ~handwritten:[] ~generated:documents in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match resolve_forest forest index ~documents with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "a title reference was rejected" diagnostics)
+    | Ok results ->
+      let resolution = List.assoc "a" results in
+      Alcotest.(check (option string)) "emitted as the identity" (Some "OTH1")
+        (Resolution.tree_id resolution
+           (List.hd referring.Parsed_document.references).Ir.span))
+
+let test_unresolved_reference_in_a_title_errors () =
+  with_fixture (fun root ->
+    let doc =
+      parse_doc ~root_id:"a" ~path:(Filename.concat root "trees-md/a.tree.md")
+        "# A\n\n## See [[nothing]]\n"
+    in
+    let index = expect_build "title index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    expect_code "unresolved title reference" "TM202"
       (resolve_forest forest index ~documents:[ doc ]))
 
 (* An external URL is not a tree reference and is never resolved. *)
@@ -850,7 +926,14 @@ let () =
         test_case "unresolved_attributions" `Quick test_unresolved_attributions;
         test_case "literal_attribution_ignored" `Quick test_literal_attribution_ignored;
         test_case "markdown_link_resolves" `Quick test_markdown_link_resolves;
-        test_case "markdown_link_unresolved_errors" `Quick test_markdown_link_unresolved_errors;
+        test_case "markdown_link_unresolved_warns" `Quick test_markdown_link_unresolved_warns;
+        test_case "root_relative_link_is_not_a_reference" `Quick
+          test_root_relative_link_is_not_a_reference;
+        test_case "unresolved_non_note_link_is_silent" `Quick
+          test_unresolved_non_note_link_is_silent;
+        test_case "reference_in_a_title_resolves" `Quick test_reference_in_a_title_resolves;
+        test_case "unresolved_reference_in_a_title_errors" `Quick
+          test_unresolved_reference_in_a_title_errors;
         test_case "external_link_not_resolved" `Quick test_external_link_not_resolved;
         test_case "tree_suffix_resolves" `Quick test_tree_suffix_reference_resolves;
         test_case "tree_suffix_exact_match_wins" `Quick test_tree_suffix_exact_match_wins;

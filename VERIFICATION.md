@@ -11,7 +11,7 @@ plus the `test/fixtures/compat` fixture.
 
 ## Full-suite status
 
-- 24 Alcotest suites, **567 tests, all passing** (`dune runtest`).
+- 24 Alcotest suites, **571 tests, all passing** (`dune runtest`).
 - Cram scenario `cli.t` runs under `dune runtest` and passes.
 - All 27 stable diagnostic codes (`TM001`–`TM500`) are exercised by at least
   one test (verified by code search; see the Diagnostics section).
@@ -173,7 +173,9 @@ plus the `test/fixtures/compat` fixture.
 | Obsidian callout → Obsidian's own blockquote markup | golden fixture (`complete.tree.md` / `complete.tree`) |
 | Footnotes numbered by reference order; gathered at the end; unreferenced dropped | `block_test.ml` (`footnotes_numbered_by_reference`, `unreferenced_footnote_dropped`); golden fixture |
 | `![[x.png]]` embeds an attachment, found by name under the asset roots | `forest_index_test.ml` (assets); golden fixture |
-| A local Markdown link resolves as a tree reference; an external URL does not | `forest_index_test.ml` (`markdown_link_resolves`, `markdown_link_unresolved_errors`, `external_link_not_resolved`) |
+| A local Markdown link resolves as a tree reference; an external URL does not | `forest_index_test.ml` (`markdown_link_resolves`, `external_link_not_resolved`) |
+| Only a wiki link is closed-world: a site-rooted URL is never a reference, an unresolved one is left as written, `.md` warns | `forest_index_test.ml` (`root_relative_link_is_not_a_reference`, `unresolved_non_note_link_is_silent`, `markdown_link_unresolved_warns`) |
+| A reference written in a heading is resolved and checked | `forest_index_test.ml` (`reference_in_a_title_resolves`, `unresolved_reference_in_a_title_errors`) |
 | Percent-encoding is idempotent and applied only on the way out | `inline_test.ml` (`parse_link_space_encoded`) |
 
 ### Rejected Markdown (lines 440–447)

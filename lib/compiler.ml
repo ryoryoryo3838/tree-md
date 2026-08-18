@@ -9,14 +9,20 @@ let is_external_uri s =
   || (len >= 8 && String.sub s 0 8 = "https://")
   || (len >= 7 && String.sub s 0 7 = "mailto:")
 
-(* In Forester, `[label](addr)` is a tree reference, not a URL: there is no
-   relative-link form. So a Markdown link whose destination is not an external
-   URI names a tree, and mdbase v0.3 §08 says as much — a Markdown link is a
-   link. Resolving it is what keeps `[see](note.md)` from emitting a reference
-   to an address no tree has. A bare fragment is left alone. *)
+(* A Markdown link whose destination is not a URL may name a tree, and mdbase
+   v0.3 §08 counts one as a link, so it is offered to resolution: `[see](note.md)`
+   then emits the identity `note` resolves to rather than an address no tree has.
+
+   What it is not is a *requirement*. A forest legitimately writes `[reset](/)`
+   or `[feed](/index/index.xml)` — a URL rooted at the site, which names no tree
+   and never did. So a leading `/` is excluded outright, and a destination that
+   simply does not resolve is left exactly as written. Only a wiki link is
+   closed-world; a Markdown link was never checked at all before, and turning
+   that into an error would reject forests that were correct. *)
 let is_tree_reference destination =
   destination <> ""
   && destination.[0] <> '#'
+  && destination.[0] <> '/'
   && not (is_external_uri destination)
 
 let rec collect_inline_refs inlines acc_refs acc_assets =
@@ -79,11 +85,21 @@ and collect_block_refs blocks acc_refs acc_assets =
     | _ -> (refs, assets)
   ) (acc_refs, acc_assets) blocks
 
+(* A title is content too. A `[[link]]` written in a heading used to be
+   collected nowhere, so it was never resolved and never checked: it reached the
+   output as the spelling it was written as, and if it named nothing at all,
+   nothing said so. *)
 and collect_content_refs (items : Outline.content list) acc_refs acc_assets =
   List.fold_left (fun (refs, assets) item ->
     match item with
     | Outline.Block b -> collect_block_refs [b] refs assets
-    | Outline.Section sec -> collect_content_refs sec.Outline.content refs assets
+    | Outline.Section sec ->
+      let refs, assets =
+        match sec.Outline.title with
+        | Some title -> collect_inline_refs title refs assets
+        | None -> (refs, assets)
+      in
+      collect_content_refs sec.Outline.content refs assets
   ) (acc_refs, acc_assets) items
 
 let collect_meta_refs (meta : Ir.inline list Metadata.t) =
@@ -232,7 +248,12 @@ let parse ?(mdbase = no_mdbase) ?(collection_path = "") ~default_id ~filename so
         Error (sorted (fm_warnings @ md_warnings @ ol_diags))
       | Ok (tree, ol_warnings) ->
         let defs = Outline.definitions tree in
-        let content_refs, assets = collect_content_refs tree.Outline.content [] [] in
+        let title_refs, title_assets =
+          collect_inline_refs tree.Outline.title [] []
+        in
+        let content_refs, assets =
+          collect_content_refs tree.Outline.content title_refs title_assets
+        in
         let meta_refs = collect_meta_refs meta in
         let refs = meta_refs @ content_refs in
         Ok ({

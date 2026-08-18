@@ -67,11 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   several matches is `TM204` and says to write the path instead. Obsidian's
   `![[x.png|300]]` sets the width, and a non-numeric alias is the alt text.
 
-- A Markdown link with a local destination resolves like any other reference.
-  In Forester `[label](addr)` is a tree reference, not a URL, so `[see](note.md)`
-  now emits the identity `note` resolves to, and an unresolvable one is
-  `TM202`. It used to pass through untouched, putting a reference to an
-  address no tree has into the output and reporting nothing.
+- A Markdown link whose destination is not a URL is offered to resolution, so
+  `[see](note.md)` emits the identity `note` resolves to instead of an address
+  no tree has. Only a wiki link is closed-world: a destination beginning with
+  `/` names the published site and is never a tree reference, and one that
+  simply does not resolve is left as written. A destination ending in `.md`
+  can only have meant a note, so an unresolvable one warns.
+
+- A reference written in a heading is resolved. `## See [[other]]` was
+  collected nowhere, so it reached the output as the spelling it was written
+  as, and if it named nothing at all, nothing said so.
 
 - Diagnostics now have two severities. A **warning** carries the same code,
   span, and excerpt as an error, but never changes the exit code and never

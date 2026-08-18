@@ -603,22 +603,25 @@ The exact spelling is always tried before any stripped one, so a tree whose
 identity genuinely is `notes.tree` is not shadowed, and an unresolvable
 `[[missing.tree]]` is still a `TM202`.
 
-### A Markdown link is a link too
+### A Markdown link may be a link too
 
-In Forester, `[label](addr)` is a tree reference, not a URL: there is no
-relative-link form. So a Markdown link whose destination is not an external
-URI names a tree, and it resolves exactly as a wiki link does — mdbase v0.3
-§08 counts one as a link too:
+A Markdown link whose destination is not a URL may name a tree, and mdbase v0.3
+§08 counts one as a link, so it is offered to resolution:
 
 ```markdown
-[see](information-concept.md)   →  [see](mlnet-7)
+[see](information-concept.md)    →  [see](mlnet-7)
 [see](notes/information-concept) →  [see](mlnet-7)
 [see](https://example.test)      →  unchanged, it is a URL
+[reset](/)                       →  unchanged, it is a URL rooted at the site
+[paper](papers/2026.pdf)         →  unchanged, it resolved to nothing
 ```
 
-An unresolvable local destination is `TM202`. Passing it through untouched, as
-earlier versions did, put a reference to an address no tree has into the
-output and reported nothing.
+**Only a wiki link is closed-world.** A destination beginning with `/` names
+the published site, not a tree, and is never offered to resolution at all; one
+that simply does not resolve is left exactly as written, because it may name
+something the forest does not own. A destination ending in `.md` can only have
+meant a note, so an unresolvable one is a **warning** — it is still emitted as
+written, and still compiles.
 
 ### When a name reaches more than one file
 
