@@ -32,6 +32,12 @@ here}}
 \p{hard\<html:br>{}break}
 \p{\<html:img>[src]{https://example.test/img.png}[alt]{External}{}}
 \p{\<html:img>[src]{\route-asset{assets/images/x.png}}[alt]{Plot}{}}
+\p{GFM and Obsidian marks: \<html:del>{struck}, \<html:mark>{highlighted},  and a footnote\<html:sup>[class]{footnote-ref}{\<html:a>[id]{fnref-1}[href]{\verbFMD|#FMDfn-1}{1}}.}
+\ul{\li{\<html:input>[type]{checkbox}[disabled]{disabled}{} not done}
+\li{\<html:input>[type]{checkbox}[disabled]{disabled}[checked]{checked}{} done}}
+\<html:table>{\<html:thead>{\<html:tr>{\<html:th>[style]{text-align: left}{left}\<html:th>[style]{text-align: center}{centre}\<html:th>[style]{text-align: right}{right}}}\<html:tbody>{\<html:tr>{\<html:td>[style]{text-align: left}{a}\<html:td>[style]{text-align: center}{b}\<html:td>[style]{text-align: right}{c}}}}
+\<html:blockquote>[class]{callout}[data-callout]{warning}{\<html:div>[class]{callout-title}{Take care}
+\p{The callout body.}}
 }
 }
 
@@ -44,3 +50,6 @@ here}}
 \p{Untitled and unnamed, nested one level deeper.}
 }
 }
+
+\<html:hr>[class]{footnotes-separator}{}
+\<html:ol>[class]{footnotes}{\<html:li>[id]{fn-1}{\p{The footnote body.}\<html:a>[class]{footnote-backref}[href]{\verbFMD|#FMDfnref-1}{↩}}}

@@ -1,5 +1,7 @@
 type purpose = Link | Image
 
+type t = { encoded : string; written : string }
+
 let uri_safe c =
   match c with
   | 'A'..'Z' | 'a'..'z' | '0'..'9'
@@ -12,17 +14,32 @@ let hex_digit n =
   if n < 10 then Char.chr (Char.code '0' + n)
   else Char.chr (Char.code 'A' + n - 10)
 
+let is_hex c =
+  (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f')
+
+(* Encoding is idempotent: a `%` that already begins a valid triplet is left
+   alone, so a URL the note wrote as `a%20b` stays that rather than becoming
+   `a%2520b`. *)
 let percent_encode s =
-  let buf = Buffer.create (String.length s) in
-  String.iter (fun c ->
-    if c <= '\x1F' || c = '\x7F' || not (uri_safe c) then begin
-      let code = Char.code c in
-      Buffer.add_char buf '%';
-      Buffer.add_char buf (hex_digit (code lsr 4));
-      Buffer.add_char buf (hex_digit (code land 0xF))
-    end else
-      Buffer.add_char buf c
-  ) s;
+  let len = String.length s in
+  let buf = Buffer.create len in
+  let i = ref 0 in
+  while !i < len do
+    let c = s.[!i] in
+    if c = '%' && !i + 2 < len && is_hex s.[!i + 1] && is_hex s.[!i + 2] then begin
+      Buffer.add_string buf (String.sub s !i 3);
+      i := !i + 3
+    end
+    else begin
+      if c <= '\x1F' || c = '\x7F' || not (uri_safe c) then begin
+        let code = Char.code c in
+        Buffer.add_char buf '%';
+        Buffer.add_char buf (hex_digit (code lsr 4));
+        Buffer.add_char buf (hex_digit (code land 0xF))
+      end else Buffer.add_char buf c;
+      incr i
+    end
+  done;
   Buffer.contents buf
 
 (* Consume the scheme prefix: [A-Za-z][A-Za-z0-9+.-]*: *)
@@ -86,14 +103,14 @@ let validate purpose span s =
       if String.length s > 0 && s.[0] = '#' then
         (* Fragment: accept for links, reject for images *)
         begin match purpose with
-        | Link -> Ok (percent_encode s)
+        | Link -> Ok { encoded = percent_encode s; written = s }
         | Image ->
           Error (Diagnostic.make TM205 (Span.Source_span span)
                   "fragment URI not allowed for images")
         end
       else
         (* Relative path: accept for both purposes *)
-        Ok (percent_encode s)
+        Ok { encoded = percent_encode s; written = s }
     | Some (scheme, _rest) ->
       let allowed = schemes_for purpose in
       if is_unsafe_scheme scheme allowed then
@@ -101,4 +118,4 @@ let validate purpose span s =
                 ("unsafe URI scheme: " ^ scheme))
       else
         (* Safe scheme; percent-encode unsafe bytes in the full URI *)
-        Ok (percent_encode s)
+        Ok { encoded = percent_encode s; written = s }

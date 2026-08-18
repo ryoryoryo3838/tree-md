@@ -1,9 +1,11 @@
 let source_from_string text =
   Result.get_ok (Tree_md.Source.of_string ~path:"test.md" text)
 
+(* Each compile stage now returns its warnings alongside the value it
+   produced. These suites assert on the value, so they drop the warnings. *)
 let parse_inlines text =
   let src = source_from_string text in
-  Tree_md.Markdown.parse_inlines src text ~base_byte:0
+  Tree_md.Markdown.parse_inlines src text ~base_byte:0 |> Result.map fst
 
 let rec node_to_string = function
   | Tree_md.Ir.Text s -> Printf.sprintf "Text(%S)" s
@@ -24,6 +26,10 @@ let rec node_to_string = function
     Printf.sprintf "WikiEmbed(%S)" t
   | Tree_md.Ir.Math { tex = t; display = d } ->
     Printf.sprintf "Math(%S %b)" t d
+  | Tree_md.Ir.Strikethrough _ -> "Strikethrough"
+  | Tree_md.Ir.Highlight _ -> "Highlight"
+  | Tree_md.Ir.Footnote_ref { label; number } ->
+    Printf.sprintf "FootnoteRef(%S %d)" label number
   | Tree_md.Ir.Hard_break -> "HardBreak"
   | Tree_md.Ir.Soft_break -> "SoftBreak"
 
@@ -201,13 +207,49 @@ let test_raw_html_rejected () =
   | Ok _ ->
     Alcotest.fail "expected error for raw HTML"
 
-let test_strikethrough_rejected () =
-  let result = parse_inlines "~~strike~~" in
-  match result with
+(* HTML has <del> for ~~x~~ and <mark> for Obsidian's ==x==, and Forester
+   reaches both through its html namespace, so both have a faithful output. *)
+let test_strikethrough_lowered () =
+  match parse_inlines "~~strike~~" with
   | Error diags ->
-    Alcotest.(check bool) "strikethrough TM102" true (has_diag_code diags "TM102")
-  | Ok _ ->
-    Alcotest.fail "expected error for strikethrough"
+    Alcotest.fail ("strikethrough rejected: "
+                   ^ String.concat "; "
+                       (List.map (fun d -> d.Tree_md.Diagnostic.message) diags))
+  | Ok inlines ->
+    Alcotest.(check (list string)) "one strikethrough" [ "Strikethrough" ]
+      (strings_of (Ok inlines))
+
+let test_highlight_lowered () =
+  match parse_inlines "==mark==" with
+  | Error diags ->
+    Alcotest.fail ("highlight rejected: "
+                   ^ String.concat "; "
+                       (List.map (fun d -> d.Tree_md.Diagnostic.message) diags))
+  | Ok inlines ->
+    Alcotest.(check (list string)) "one highlight" [ "Highlight" ]
+      (strings_of (Ok inlines))
+
+(* A delimiter inside a code span is not one: cmarkit hands the span over as a
+   single Code node, which the mark pass never looks inside. *)
+let test_highlight_ignored_in_code () =
+  match parse_inlines "`==not a mark==`" with
+  | Error _ -> Alcotest.fail "code span rejected"
+  | Ok inlines ->
+    Alcotest.(check (list string)) "left as code"
+      [ "Code(\"==not a mark==\")" ] (strings_of (Ok inlines))
+
+(* An Obsidian comment is discarded, as an HTML comment already is. *)
+let test_obsidian_comment_dropped () =
+  match parse_inlines "a %%hidden%% b" with
+  | Error _ -> Alcotest.fail "comment rejected"
+  | Ok inlines ->
+    let rendered = String.concat "" (strings_of (Ok inlines)) in
+    Alcotest.(check bool) "comment text is gone" false
+      (let rec find i =
+         i + 6 <= String.length rendered
+         && (String.sub rendered i 6 = "hidden" || find (i + 1))
+       in
+       find 0)
 
 (* ── URI validation tests ── *)
 
@@ -218,7 +260,12 @@ let test_uri_percent_encode_space () =
   in
   match result with
   | Ok s ->
-    Alcotest.(check string) "percent encode space" "https://example.test/a%20b" s
+    Alcotest.(check string) "percent encode space"
+      "https://example.test/a%20b" s.Tree_md.Safe_uri.encoded;
+    (* The written form is what a file-system lookup needs, so it keeps the
+       bytes the note actually wrote. *)
+    Alcotest.(check string) "written form is untouched"
+      "https://example.test/a b" s.Tree_md.Safe_uri.written
   | Error d ->
     Alcotest.fail ("expected Ok, got: " ^ d.Tree_md.Diagnostic.message)
 
@@ -299,7 +346,7 @@ let test_metadata_lower_tags () =
     meta = [];
   } in
   match Tree_md.Metadata.lower_inline_values ~parse raw with
-  | Ok lowered ->
+  | Ok (lowered, _) ->
     Alcotest.(check int) "two tags" 2 (List.length lowered.tags);
     (match lowered.tags with
      | [tag1; tag2] ->
@@ -340,7 +387,7 @@ let test_metadata_lower_meta () =
     ];
   } in
   match Tree_md.Metadata.lower_inline_values ~parse raw with
-  | Ok lowered ->
+  | Ok (lowered, _) ->
     Alcotest.(check int) "one meta" 1 (List.length lowered.meta);
     (match lowered.meta with
      | [(key, value)] ->
@@ -431,12 +478,22 @@ let test_parse_image_data_rejected () =
 
 (* ── Invalid Wiki forms via parse_inlines ── *)
 
+(* A wiki target names a file, so it may be spelled the way Obsidian writes a
+   file name: with spaces, or in Japanese. Resolution decides whether it names
+   a tree; an unresolvable one is still TM202, one layer up. *)
 let test_parse_wiki_bad_id () =
-  let result = parse_inlines "[[bad id]]" in
-  match result with
+  match parse_inlines "[[bad id]]" with
+  | Ok _ -> ()
   | Error diags ->
-    Alcotest.(check bool) "bad wiki id TM105" true (has_diag_code diags "TM105")
-  | Ok _ -> Alcotest.fail "expected TM105 for invalid wiki target"
+    let messages = List.map (fun d -> d.Tree_md.Diagnostic.message) diags in
+    Alcotest.fail ("spaced wiki target rejected: " ^ String.concat "; " messages)
+
+let test_parse_wiki_japanese_target () =
+  match parse_inlines "[[日本語のノート]]" with
+  | Ok _ -> ()
+  | Error diags ->
+    let messages = List.map (fun d -> d.Tree_md.Diagnostic.message) diags in
+    Alcotest.fail ("japanese wiki target rejected: " ^ String.concat "; " messages)
 
 let test_parse_wiki_empty_alias () =
   let result = parse_inlines "[[id|]]" in
@@ -470,13 +527,22 @@ let test_parse_unbalanced_math () =
 
 (* ── Percent encoding applied via parse_inlines ── *)
 
+(* A link destination is carried as it was written. Percent-encoding belongs
+   to emission, and only to a destination that stays a URL: a local one names
+   a tree and is emitted as the identity it resolved to. *)
 let test_parse_link_space_encoded () =
   let result = parse_inlines "[label](<https://example.test/a b>)" in
   match result with
   | Ok inlines ->
     (match inlines with
      | [{ Tree_md.Ir.node = Tree_md.Ir.Link { destination = dest; _ }; _ }] ->
-       Alcotest.(check string) "link space encoded" "https://example.test/a%20b" dest
+       Alcotest.(check string) "carried as written" "https://example.test/a b" dest;
+       Alcotest.(check string) "encoded on the way out"
+         "https://example.test/a%20b" (Tree_md.Safe_uri.percent_encode dest);
+       (* Encoding is idempotent, so a URL already written encoded stays put. *)
+       Alcotest.(check string) "already-encoded stays put"
+         "https://example.test/a%20b"
+         (Tree_md.Safe_uri.percent_encode "https://example.test/a%20b")
      | _ -> Alcotest.fail "expected Link node")
   | Error diags ->
     let msgs = List.map (fun d -> d.Tree_md.Diagnostic.message) diags
@@ -541,7 +607,10 @@ let () =
     ; "escaped_asterisk", [ test_case "escaped_asterisk" `Quick test_escaped_asterisk ]
     ; "unicode", [ test_case "unicode" `Quick test_unicode ]
     ; "raw_html_rejected", [ test_case "raw_html_rejected" `Quick test_raw_html_rejected ]
-    ; "strikethrough_rejected", [ test_case "strikethrough_rejected" `Quick test_strikethrough_rejected ]
+    ; "strikethrough_lowered", [ test_case "strikethrough_lowered" `Quick test_strikethrough_lowered ]
+    ; "highlight_lowered", [ test_case "highlight_lowered" `Quick test_highlight_lowered ]
+    ; "highlight_ignored_in_code", [ test_case "highlight_ignored_in_code" `Quick test_highlight_ignored_in_code ]
+    ; "obsidian_comment_dropped", [ test_case "obsidian_comment_dropped" `Quick test_obsidian_comment_dropped ]
     ; "uri_percent_encode_space", [ test_case "uri_percent_encode_space" `Quick test_uri_percent_encode_space ]
     ; "uri_mailto_accepted", [ test_case "uri_mailto_accepted" `Quick test_uri_mailto_accepted ]
     ; "uri_fragment_accepted", [ test_case "uri_fragment_accepted" `Quick test_uri_fragment_accepted ]
@@ -558,6 +627,7 @@ let () =
     ; "parse_link_javascript_rejected", [ test_case "parse_link_javascript_rejected" `Quick test_parse_link_javascript_rejected ]
     ; "parse_image_data_rejected", [ test_case "parse_image_data_rejected" `Quick test_parse_image_data_rejected ]
     ; "parse_wiki_bad_id", [ test_case "parse_wiki_bad_id" `Quick test_parse_wiki_bad_id ]
+    ; "parse_wiki_japanese_target", [ test_case "parse_wiki_japanese_target" `Quick test_parse_wiki_japanese_target ]
     ; "parse_wiki_empty_alias", [ test_case "parse_wiki_empty_alias" `Quick test_parse_wiki_empty_alias ]
     ; "parse_wiki_multi_pipe", [ test_case "parse_wiki_multi_pipe" `Quick test_parse_wiki_multi_pipe ]
     ; "parse_empty_math", [ test_case "parse_empty_math" `Quick test_parse_empty_math ]

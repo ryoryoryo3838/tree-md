@@ -16,4 +16,4 @@ val build :
 val resolve :
   Config.forest -> t ->
   documents:Parsed_document.t list ->
-  ((string * Resolution.t) list, Diagnostic.t list) result
+  ((string * Resolution.t) list * Diagnostic.t list, Diagnostic.t list) result

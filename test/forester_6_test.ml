@@ -44,10 +44,12 @@ let external_link label dest title =
   { Ir.node = Ir.Link { label; destination = dest; title }; Ir.span = zero_span }
 
 let external_image alt dest title =
-  { Ir.node = Ir.Image { alt; destination = dest; title }; Ir.span = zero_span }
+  { Ir.node = Ir.Image { alt; destination = dest; asset_path = dest; width = None; title };
+    Ir.span = zero_span }
 
 let local_image alt dest span =
-  { Ir.node = Ir.Image { alt; destination = dest; title = None }; Ir.span = span }
+  { Ir.node = Ir.Image { alt; destination = dest; asset_path = dest; width = None; title = None };
+    Ir.span = span }
 
 let para inlines = { Ir.bnode = Ir.Paragraph inlines; Ir.bspan = zero_span }
 let blockquote blocks = { Ir.bnode = Ir.Blockquote blocks; Ir.bspan = zero_span }
@@ -65,8 +67,8 @@ let ordered_list ?(tight=true) start items : Ir.block =
 let unordered_list ?(tight=true) items : Ir.block =
   { Ir.bnode = Ir.List { kind = Ir.Unordered; tight; items }; Ir.bspan = zero_span }
 
-let list_item blocks : Ir.list_item =
-  { Ir.item_blocks = blocks; Ir.item_span = zero_span }
+let list_item ?item_task blocks : Ir.list_item =
+  { Ir.item_blocks = blocks; Ir.item_task; Ir.item_span = zero_span }
 
 let li_text s = list_item [para [text_inline s]]
 let li_paras inlines_list = list_item (List.map (fun is -> para is) inlines_list)
@@ -80,8 +82,8 @@ let doc ?(metadata=empty_meta) blocks =
   { Ir.metadata = metadata; Ir.blocks = blocks; Ir.doc_span = zero_span }
 
 let outline ?(root_id="test") d =
-  match Outline.build ~root_id d with
-  | Ok t -> t
+  match Outline.build ~root_id ~filename:root_id d with
+  | Ok (t, _) -> t
   | Error diags ->
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
     failwith ("Outline.build failed: " ^ msgs)
@@ -91,7 +93,7 @@ let outline_blocks root_id blocks =
 
 let emit_str ?(resolution=Resolution.empty) (t : Outline.t) =
   match Forester_6.emit ~resolution t with
-  | Ok s -> s
+  | Ok (s, _) -> s
   | Error diags ->
     let msgs = List.map (fun d ->
       Printf.sprintf "%s: %s" (Diagnostic.code_string d.Diagnostic.code) d.Diagnostic.message
@@ -100,7 +102,7 @@ let emit_str ?(resolution=Resolution.empty) (t : Outline.t) =
 
 let emit_err ?(resolution=Resolution.empty) (t : Outline.t) =
   match Forester_6.emit ~resolution t with
-  | Ok s -> failwith ("expected error, got: " ^ s)
+  | Ok (s, _) -> failwith ("expected error, got: " ^ s)
   | Error diags -> diags
 
 let lines s =

@@ -340,19 +340,20 @@ let check ~config_path =
            | Ok discovery ->
              (match Compiler.compile_forest config discovery with
               | Error diagnostics -> report (base_diags () @ diagnostics)
-              | Ok expecteds ->
+              | Ok (expecteds, warnings) ->
                 (match start_snapshot.Workspace_fs.manifest with
                  | Some bytes ->
                    (match Manifest.decode ~path:(manifest_path output_root) bytes with
                     | Error diagnostics -> report (base_diags () @ diagnostics)
                     | Ok old_manifest ->
                       finish_check output_root start_snapshot
-                        (base_diags ()
+                        (warnings @ base_diags ()
                          @ compare_states output_root expecteds
                              (Some old_manifest)))
                  | None ->
                    finish_check output_root start_snapshot
-                     (base_diags () @ compare_states output_root expecteds None))))))
+                     (warnings @ base_diags ()
+                      @ compare_states output_root expecteds None))))))
 
 (* ── transactional build ── *)
 
@@ -726,13 +727,16 @@ let recover output_root =
 
 (* ── input recheck under the lock ── *)
 
-let compile config =
+(* Returns the expected outputs, the discovery they came from, and the
+   warnings the compile collected on the way. Warnings do not stop a build;
+   they are carried out to the CLI and reported alongside its summary. *)
+let compile ?(allow_pending = false) config =
   match Discovery.scan config with
   | Error diagnostics -> Error diagnostics
   | Ok discovery ->
-    (match Compiler.compile_forest config discovery with
+    (match Compiler.compile_forest ~allow_pending config discovery with
      | Error diagnostics -> Error diagnostics
-     | Ok expecteds -> Ok (expecteds, discovery))
+     | Ok (expecteds, warnings) -> Ok (expecteds, discovery, warnings))
 
 (* Digest of every file a compile consumes: the compiler configuration, the
    forest configuration, every discovered source, and every handwritten root.
@@ -787,14 +791,20 @@ let mint_addresses config discovery =
   match config.Config.id.Config.mint with
   | Config.Off -> Ok []
   | Config.By_build -> (
-    match Compiler.identities config discovery with
+    (* Which key holds the address is the collection's to say, so the pass that
+       fills it in asks mdbase.yaml rather than assuming `id`. *)
+    match Compiler.load_mdbase config with
+    | Error diagnostics -> Error diagnostics
+    | Ok (mdbase, _warnings) ->
+    let id_field = mdbase.Compiler.settings.Mdbase_config.id_field in
+    match Compiler.identities ~mdbase config discovery with
     | Error diagnostics -> Error diagnostics
     | Ok taken -> (
-      match Mint.plan config ~taken discovery with
+      match Mint.plan ~id_field config ~taken discovery with
       | Error diagnostics -> Error diagnostics
       | Ok [] -> Ok []
       | Ok planned -> (
-        match Mint.apply planned with
+        match Mint.apply ~id_field planned with
         | Error diagnostics -> Error diagnostics
         | Ok () -> Ok planned)))
 
@@ -819,28 +829,37 @@ let build ~config_path =
          lock_and_build config (fun () ->
            match
              (let* () = recover output_root in
-              let* expecteds, _discovery = compile config in
-              normal_build config expecteds)
+              let* expecteds, _discovery, warnings = compile config in
+              let* summary = normal_build config expecteds in
+              Ok (summary, warnings))
            with
            | Error diagnostics -> report diagnostics
-           | Ok summary -> { summary; minted = []; diagnostics = [] })
+           | Ok (summary, warnings) ->
+             { summary; minted = []; diagnostics = warnings })
        else
          (* No journal and no orphan stage: compile and validate before any
             output state is created, so a failing forest never writes. *)
-         match compile config with
+         (* The compile before minting tolerates a tree that has no address
+            yet, because minting is what is about to give it one. With
+            mint = "off" nothing will, so an unaddressed tree is TM206 here. *)
+         let allow_pending =
+           config.Config.id.Config.mint = Config.By_build
+         in
+         match compile ~allow_pending config with
          | Error diagnostics -> report diagnostics
-         | Ok (first_expecteds, first_discovery) ->
+         | Ok (first_expecteds, first_discovery, first_warnings) ->
          (* Addresses are handed out only to a forest that compiles, and the
             recompile is what turns them into the outputs' names. *)
          match mint_addresses config first_discovery with
          | Error diagnostics -> report diagnostics
          | Ok minted ->
          match
-           (if minted = [] then Ok (first_expecteds, first_discovery)
+           (if minted = [] then
+              Ok (first_expecteds, first_discovery, first_warnings)
             else compile config)
          with
          | Error diagnostics -> report diagnostics
-         | Ok (expecteds, discovery) ->
+         | Ok (expecteds, discovery, warnings) ->
            let pre_digests = input_digests config discovery in
            lock_and_build config (fun () ->
              match
@@ -852,8 +871,9 @@ let build ~config_path =
                     (* a concurrent writer crashed while we compiled without
                        the lock: recover before compiling current source *)
                     (let* () = recover output_root in
-                     let* expecteds, _discovery = compile config in
-                     normal_build config expecteds)
+                     let* expecteds, _discovery, warnings = compile config in
+                     let* summary = normal_build config expecteds in
+                     Ok (summary, warnings))
                   else
                     let inputs_changed =
                       match pre_digests with
@@ -863,9 +883,13 @@ let build ~config_path =
                         || not (rescan_unchanged config discovery)
                     in
                     if inputs_changed then
-                      let* expecteds, _discovery = compile config in
-                      normal_build config expecteds
-                    else normal_build config expecteds)
+                      let* expecteds, _discovery, warnings = compile config in
+                      let* summary = normal_build config expecteds in
+                      Ok (summary, warnings)
+                    else
+                      let* summary = normal_build config expecteds in
+                      Ok (summary, warnings))
              with
              | Error diagnostics -> report diagnostics
-             | Ok summary -> { summary; minted; diagnostics = [] }))
+             | Ok (summary, warnings) ->
+               { summary; minted; diagnostics = warnings }))

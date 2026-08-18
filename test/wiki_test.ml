@@ -174,8 +174,18 @@ let test_left_bracket_run () =
 
 (* ── Invalid closed forms ── *)
 
-let test_bad_id_diagnostic () =
+(* A target names a file, and a file may be called "bad id". Whether anything
+   answers to that name is resolution's question, not this layer's. *)
+let test_spaced_target_accepted () =
   let _shapes, diags = shapes_of "[[bad id]]" in
+  Alcotest.(check bool) "no TM105" false (has_code diags "TM105")
+
+let test_japanese_target_accepted () =
+  let _shapes, diags = shapes_of "[[日本語のノート]]" in
+  Alcotest.(check bool) "no TM105" false (has_code diags "TM105")
+
+let test_backslash_target_diagnostic () =
+  let _shapes, diags = shapes_of "[[a\\\\b]]" in
   Alcotest.(check bool) "has TM105" true (has_code diags "TM105")
 
 let test_empty_alias_diagnostic () =
@@ -266,7 +276,9 @@ let () =
     ; "larger_bracket_run", [ test_case "larger_bracket_run" `Quick test_larger_bracket_run ]
     ; "right_bracket_run", [ test_case "right_bracket_run" `Quick test_right_bracket_run ]
     ; "left_bracket_run", [ test_case "left_bracket_run" `Quick test_left_bracket_run ]
-    ; "bad_id_diagnostic", [ test_case "bad_id_diagnostic" `Quick test_bad_id_diagnostic ]
+    ; "spaced_target_accepted", [ test_case "spaced_target_accepted" `Quick test_spaced_target_accepted ]
+    ; "japanese_target_accepted", [ test_case "japanese_target_accepted" `Quick test_japanese_target_accepted ]
+    ; "backslash_target_diagnostic", [ test_case "backslash_target_diagnostic" `Quick test_backslash_target_diagnostic ]
     ; "empty_alias_diagnostic", [ test_case "empty_alias_diagnostic" `Quick test_empty_alias_diagnostic ]
     ; "multiple_pipes_diagnostic", [ test_case "multiple_pipes_diagnostic" `Quick test_multiple_pipes_diagnostic ]
     ; "escaped_pipe_no_split", [ test_case "escaped_pipe_no_split" `Quick test_escaped_pipe_no_split ]

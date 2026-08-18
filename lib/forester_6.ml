@@ -103,6 +103,12 @@ let is_external_uri s =
   is_http_uri s
   || (String.length s >= 7 && String.sub s 0 7 = "mailto:")
 
+(* In Forester `[label](addr)` is a tree reference, not a URL. A local
+   destination therefore names a tree and is emitted as the identity it
+   resolved to. A bare fragment names neither, so it is left as escaped text
+   rather than emitted as an address. *)
+let is_tree_reference s = s <> "" && s.[0] <> '#' && not (is_external_uri s)
+
 (* ── Inline emission ── *)
 
 let rec emit_inlines (w : writer) buf (inlines : Ir.inline list) =
@@ -121,6 +127,14 @@ and emit_inline_node (w : writer) buf (node : Ir.inline_node) span =
     Buffer.add_string buf "\\strong{";
     emit_inlines w buf inlines;
     Buffer.add_char buf '}'
+  | Ir.Strikethrough inlines ->
+    Buffer.add_string buf "\\<html:del>{";
+    emit_inlines w buf inlines;
+    Buffer.add_char buf '}'
+  | Ir.Highlight inlines ->
+    Buffer.add_string buf "\\<html:mark>{";
+    emit_inlines w buf inlines;
+    Buffer.add_char buf '}'
   | Ir.Code s ->
     Buffer.add_string buf "\\code{";
     w.text buf s;
@@ -137,8 +151,18 @@ and emit_inline_node (w : writer) buf (node : Ir.inline_node) span =
     Buffer.add_string buf "#{";
     w.tex span buf tex;
     Buffer.add_char buf '}'
-  | Ir.Image { alt; destination; title } ->
-    emit_image w buf alt destination title span
+  | Ir.Image { alt; destination; width; title; _ } ->
+    emit_image w buf alt destination width title span
+  | Ir.Footnote_ref { label = _; number } ->
+    let n = string_of_int number in
+    Buffer.add_string buf "\\<html:sup>";
+    w.xml_attr buf "class" (fun b -> w.text b "footnote-ref");
+    Buffer.add_string buf "{\\<html:a>";
+    w.xml_attr buf "id" (fun b -> w.text b ("fnref-" ^ n));
+    w.xml_attr buf "href" (fun b -> w.text b ("#fn-" ^ n));
+    Buffer.add_char buf '{';
+    w.text buf n;
+    Buffer.add_string buf "}}"
   | Ir.Hard_break ->
     Buffer.add_string buf "\\<html:br>{}"
   | Ir.Soft_break ->
@@ -169,7 +193,8 @@ and emit_link w buf label destination title span =
     match title with
     | Some t ->
       Buffer.add_string buf "\\<html:a>";
-      w.xml_attr buf "href" (fun b -> w.uri_text b destination);
+      w.xml_attr buf "href"
+        (fun b -> w.uri_text b (Safe_uri.percent_encode destination));
       Buffer.add_string buf "[title]{";
       w.text buf t;
       Buffer.add_string buf "}{";
@@ -179,7 +204,7 @@ and emit_link w buf label destination title span =
       Buffer.add_char buf '[';
       emit_inlines w buf label;
       Buffer.add_string buf "](";
-      w.uri_text buf destination;
+      w.uri_text buf (Safe_uri.percent_encode destination);
       Buffer.add_char buf ')'
   end else begin
     match title with
@@ -192,11 +217,13 @@ and emit_link w buf label destination title span =
       Buffer.add_char buf '[';
       emit_inlines w buf label;
       Buffer.add_string buf "](";
-      w.uri_text buf destination;
+      if is_tree_reference destination then
+        w.safe_id buf (resolved_id w span destination)
+      else w.uri_text buf destination;
       Buffer.add_char buf ')'
   end
 
-and emit_image w buf alt destination title span =
+and emit_image w buf alt destination width title span =
   let is_ext = is_http_uri destination in
   if is_ext then begin
     Buffer.add_string buf "\\<html:img>";
@@ -205,6 +232,9 @@ and emit_image w buf alt destination title span =
     Buffer.add_string buf "[alt]{";
     w.text buf alt_text;
     Buffer.add_char buf '}';
+    (match width with
+     | Some value -> w.xml_attr buf "width" (fun b -> w.text b value)
+     | None -> ());
     (match title with
      | Some t ->
        Buffer.add_string buf "[title]{";
@@ -223,7 +253,11 @@ and emit_image w buf alt destination title span =
       let alt_text = flatten_alt w alt in
       Buffer.add_string buf "[alt]{";
       w.text buf alt_text;
-      Buffer.add_string buf "}{}"
+      Buffer.add_char buf '}';
+      (match width with
+       | Some value -> w.xml_attr buf "width" (fun b -> w.text b value)
+       | None -> ());
+      Buffer.add_string buf "{}"
     | None ->
       let msg = "unresolved local image (no route-asset mapping)" in
       let diag = Diagnostic.make TM106 (Span.Source_span span) msg in
@@ -245,6 +279,10 @@ and flatten_alt (w : writer) (inlines : Ir.inline list) : string =
       go (is @ rest)
     | { Ir.node = Ir.Strong is; _ } :: rest ->
       go (is @ rest)
+    | { Ir.node = Ir.Strikethrough is; _ } :: rest ->
+      go (is @ rest)
+    | { Ir.node = Ir.Highlight is; _ } :: rest ->
+      go (is @ rest)
     | { Ir.node = Ir.Link { label; _ }; _ } :: rest ->
       go (label @ rest)
     | { Ir.node = Ir.Wiki_link { target; alias }; _ } :: rest ->
@@ -257,6 +295,9 @@ and flatten_alt (w : writer) (inlines : Ir.inline list) : string =
       go rest
     | { Ir.node = (Ir.Hard_break | Ir.Soft_break); _ } :: rest ->
       Buffer.add_char buf ' ';
+      go rest
+    | { Ir.node = Ir.Footnote_ref { number; _ }; _ } :: rest ->
+      w.text buf (string_of_int number);
       go rest
     | { Ir.node = Ir.Image _; Ir.span = ispan } :: _ ->
       let msg = "nested image in alt text" in
@@ -288,6 +329,10 @@ let rec emit_block (w : writer) buf (block : Ir.block) =
     emit_list w buf kind tight items
   | Ir.Code_block { info; code } ->
     emit_code_block w buf info code
+  | Ir.Table { alignment; header; rows } ->
+    emit_table w buf alignment header rows
+  | Ir.Callout { kind; folded; title; body } ->
+    emit_callout w buf kind folded title body
   | Ir.Thematic_break ->
     Buffer.add_string buf "\\<html:hr>{}"
   | Ir.Heading { level = _; title = _ } ->
@@ -302,6 +347,10 @@ let rec emit_block (w : writer) buf (block : Ir.block) =
     Buffer.add_string buf "##{";
     w.tex block.Ir.bspan buf tex;
     Buffer.add_char buf '}'
+  (* A definition never emits where it was written; the pass that numbers the
+     references gathers them all into the section below. *)
+  | Ir.Footnote_def _ -> ()
+  | Ir.Footnotes entries -> emit_footnotes w buf entries
 
 and emit_blocks_body (w : writer) buf (blocks : Ir.block list) =
   let rec loop = function
@@ -343,16 +392,29 @@ and emit_items (w : writer) buf sep tight (items : Ir.list_item list) =
     | [] -> ()
     | [item] ->
       if not first then Buffer.add_string buf sep;
-      emit_list_item w buf tight item.Ir.item_blocks
+      emit_list_item w buf tight item.Ir.item_task item.Ir.item_blocks
     | item :: rest ->
       if not first then Buffer.add_string buf sep;
-      emit_list_item w buf tight item.Ir.item_blocks;
+      emit_list_item w buf tight item.Ir.item_task item.Ir.item_blocks;
       loop false rest
   in
   loop true items
 
-and emit_list_item (w : writer) buf tight (blocks : Ir.block list) =
+and emit_list_item (w : writer) buf tight task (blocks : Ir.block list) =
   Buffer.add_string buf "\\li{";
+  (* A task marker is a checkbox, disabled because the rendered page is not
+     where the list is edited — the note is. *)
+  (match task with
+   | None -> ()
+   | Some state ->
+     Buffer.add_string buf "\\<html:input>";
+     w.xml_attr buf "type" (fun b -> w.text b "checkbox");
+     w.xml_attr buf "disabled" (fun b -> w.text b "disabled");
+     (match state with
+      | Ir.Task_checked -> w.xml_attr buf "checked" (fun b -> w.text b "checked")
+      | Ir.Task_unchecked -> ());
+     Buffer.add_string buf "{}";
+     Buffer.add_char buf ' ');
   (match blocks with
    | [Ir.{ bnode = Ir.Paragraph inlines; _ }] when tight ->
      emit_inlines w buf inlines
@@ -380,6 +442,91 @@ and emit_blocks_inside_li (w : writer) buf tight (blocks : Ir.block list) =
       loop rest
   in
   loop blocks
+
+(* Forester has no table of its own, but HTML does and Forester can reach it.
+   Alignment goes on the cell as a style, which is the form that survives a
+   stylesheet the forest did not write. *)
+and emit_table (w : writer) buf alignment header rows =
+  let align_attr index =
+    match List.nth_opt alignment index with
+    | Some Ir.Align_left -> Some "text-align: left"
+    | Some Ir.Align_center -> Some "text-align: center"
+    | Some Ir.Align_right -> Some "text-align: right"
+    | Some Ir.Align_none | None -> None
+  in
+  let emit_cell tag index cells_left =
+    Buffer.add_string buf ("\\<html:" ^ tag ^ ">");
+    (match align_attr index with
+     | Some style -> w.xml_attr buf "style" (fun b -> w.text b style)
+     | None -> ());
+    Buffer.add_char buf '{';
+    emit_inlines w buf cells_left;
+    Buffer.add_char buf '}'
+  in
+  let emit_row tag cells =
+    Buffer.add_string buf "\\<html:tr>{";
+    List.iteri (fun index cell -> emit_cell tag index cell) cells;
+    Buffer.add_char buf '}'
+  in
+  Buffer.add_string buf "\\<html:table>{";
+  (match header with
+   | Some cells ->
+     Buffer.add_string buf "\\<html:thead>{";
+     emit_row "th" cells;
+     Buffer.add_char buf '}'
+   | None -> ());
+  if rows <> [] then begin
+    Buffer.add_string buf "\\<html:tbody>{";
+    List.iter (emit_row "td") rows;
+    Buffer.add_char buf '}'
+  end;
+  Buffer.add_char buf '}'
+
+(* Obsidian's own callout markup, so a stylesheet written for one renders the
+   other: a blockquote carrying the kind, with the title in its own div. *)
+and emit_callout (w : writer) buf kind folded title body =
+  Buffer.add_string buf "\\<html:blockquote>";
+  w.xml_attr buf "class" (fun b -> w.text b "callout");
+  w.xml_attr buf "data-callout" (fun b -> w.text b (String.lowercase_ascii kind));
+  if folded then
+    w.xml_attr buf "data-callout-fold" (fun b -> w.text b "+");
+  Buffer.add_char buf '{';
+  Buffer.add_string buf "\\<html:div>";
+  w.xml_attr buf "class" (fun b -> w.text b "callout-title");
+  Buffer.add_char buf '{';
+  emit_inlines w buf title;
+  Buffer.add_char buf '}';
+  if body <> [] then begin
+    Buffer.add_string buf "\n";
+    emit_blocks_body w buf body
+  end;
+  Buffer.add_char buf '}'
+
+(* Forester has no footnote of its own. HTML's is an ordered list of the
+   definitions with a link back to each reference, which is what a reader
+   expects and what every Markdown renderer produces. *)
+and emit_footnotes (w : writer) buf entries =
+  Buffer.add_string buf "\\<html:hr>";
+  w.xml_attr buf "class" (fun b -> w.text b "footnotes-separator");
+  Buffer.add_string buf "{}\n";
+  Buffer.add_string buf "\\<html:ol>";
+  w.xml_attr buf "class" (fun b -> w.text b "footnotes");
+  Buffer.add_char buf '{';
+  List.iteri
+    (fun index (number, body) ->
+      if index > 0 then Buffer.add_char buf '\n';
+      let n = string_of_int number in
+      Buffer.add_string buf "\\<html:li>";
+      w.xml_attr buf "id" (fun b -> w.text b ("fn-" ^ n));
+      Buffer.add_char buf '{';
+      emit_blocks_body w buf body;
+      Buffer.add_string buf "\\<html:a>";
+      w.xml_attr buf "class" (fun b -> w.text b "footnote-backref");
+      w.xml_attr buf "href" (fun b -> w.text b ("#fnref-" ^ n));
+      Buffer.add_string buf "{\xe2\x86\xa9}";
+      Buffer.add_char buf '}')
+    entries;
+  Buffer.add_char buf '}'
 
 and emit_code_block (w : writer) buf info code =
   Buffer.add_string buf "\\<html:pre>";
@@ -542,6 +689,4 @@ let emit ~(resolution : Resolution.t) (tree : Outline.t) =
   end;
 
   let out = Buffer.contents buf in
-  let errs = List.rev !errors in
-  if errs = [] then Ok out
-  else Error errs
+  Diagnostic.gate out (List.rev !errors)

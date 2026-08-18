@@ -1,7 +1,7 @@
 (library
  (name tree_md)
  (public_name tree-md)
- (libraries cmarkit yaml unix otoml digestif yojson cmdliner))
+ (libraries cmarkit yaml unix otoml digestif yojson cmdliner re))
 
 ; The package version is declared once, in dune-project. Version.current is
 ; generated from it so that the CLI banner (tree-md --version) and the

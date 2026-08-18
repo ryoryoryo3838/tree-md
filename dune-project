@@ -28,4 +28,5 @@
   (cmdliner (>= 2.1.0))
   (yojson (>= 3.0.0))
   (digestif (>= 1.3.0))
+  (re (>= 1.11.0))
   (alcotest (and (>= 1.9.1) :with-test))))

@@ -1,5 +1,11 @@
 open Tree_md
 
+(* Each compile stage now returns its warnings alongside the value it
+   produced. These suites assert on the value, so they drop the warnings. *)
+let parse_doc ~root_id source =
+  Result.map fst (Compiler.parse ~default_id:root_id ~filename:root_id source)
+let emit_doc ~resolution doc = Result.map fst (Compiler.emit ~resolution doc)
+
 let str_contains s sub =
   let len = String.length s in
   let sublen = String.length sub in
@@ -35,7 +41,7 @@ let test_golden_complete () =
     | Ok s -> s
     | Error _ -> failwith ("invalid UTF-8 in fixture: " ^ src_path)
   in
-  let doc = match Compiler.parse ~root_id:"complete" source with
+  let doc = match parse_doc ~root_id:"complete" source with
     | Ok d -> d
     | Error diags ->
       let msgs = List.map (fun d ->
@@ -49,7 +55,7 @@ let test_golden_complete () =
       Resolution.add_asset asset.span ~routed_path:routed res
     ) Resolution.empty doc.Parsed_document.local_assets
   in
-  let result = match Compiler.emit ~resolution doc with
+  let result = match emit_doc ~resolution doc with
     | Ok s -> s
     | Error diags ->
       let msgs = List.map (fun d ->
@@ -74,7 +80,7 @@ date: 2026-08-02
 
 Body with ![img](local/a.png).
 " in
-  let doc1 = match Compiler.parse ~root_id:"test" source with
+  let doc1 = match parse_doc ~root_id:"test" source with
     | Ok d -> d
     | Error diags ->
       let msgs = List.map (fun d ->
@@ -82,7 +88,7 @@ Body with ![img](local/a.png).
       ) diags |> String.concat "; " in
       failwith ("parse1 failed: " ^ msgs)
   in
-  let doc2 = match Compiler.parse ~root_id:"test" source with
+  let doc2 = match parse_doc ~root_id:"test" source with
     | Ok d -> d
     | Error _ -> failwith "parse2 failed"
   in
@@ -97,11 +103,11 @@ Body with ![img](local/a.png).
       Resolution.add_asset asset.span ~routed_path:("root/" ^ asset.destination) res
     ) Resolution.empty doc1.Parsed_document.local_assets
   in
-  let out1 = match Compiler.emit ~resolution doc1 with
+  let out1 = match emit_doc ~resolution doc1 with
     | Ok s -> s
     | Error _ -> failwith "emit1 failed"
   in
-  let out2 = match Compiler.emit ~resolution doc2 with
+  let out2 = match emit_doc ~resolution doc2 with
     | Ok s -> s
     | Error _ -> failwith "emit2 failed"
   in
@@ -109,13 +115,13 @@ Body with ![img](local/a.png).
 
 let test_html_comment_inline_discarded () =
   let source = source_from_string "<!-- comment -->\n\nParagraph text." in
-  let doc = match Compiler.parse ~root_id:"test" source with
+  let doc = match parse_doc ~root_id:"test" source with
     | Ok d -> d
     | Error diags ->
       let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
       failwith ("parse should not error on HTML comments: " ^ msgs)
   in
-  let result = match Compiler.emit ~resolution:Resolution.empty doc with
+  let result = match emit_doc ~resolution:Resolution.empty doc with
     | Ok s -> s
     | Error diags ->
       let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
@@ -128,7 +134,7 @@ let test_html_comment_inline_discarded () =
 
 let test_html_comment_block_discarded () =
   let source = source_from_string "# Test\n\n<!-- subtree: sec -->\n## Named" in
-  let doc = match Compiler.parse ~root_id:"test" source with
+  let doc = match parse_doc ~root_id:"test" source with
     | Ok d -> d
     | Error diags ->
       let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
@@ -155,7 +161,7 @@ Prefix [[manual]] and [[notes]] suffix.
 
 **bold** before [[manual]] after.
 " in
-  let doc = match Compiler.parse ~root_id:"test" source with
+  let doc = match parse_doc ~root_id:"test" source with
     | Ok d -> d
     | Error diags ->
       let msgs = List.map (fun d ->
@@ -163,7 +169,7 @@ Prefix [[manual]] and [[notes]] suffix.
       ) diags |> String.concat "\n" in
       failwith ("parse failed:\n" ^ msgs)
   in
-  let result = match Compiler.emit ~resolution:Resolution.empty doc with
+  let result = match emit_doc ~resolution:Resolution.empty doc with
     | Ok s -> s
     | Error diags ->
       let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
@@ -186,7 +192,7 @@ let test_subtree_directive_invalid_id () =
   (* An invalid directive ID is a TM104 source error: the document fails to
      parse, so no `\subtree[...]` section is ever emitted. *)
   let source = source_from_string "# Root\n\n<!-- subtree: bad id -->\n## Section\n" in
-  match Compiler.parse ~root_id:"test" source with
+  match parse_doc ~root_id:"test" source with
   | Ok _ -> Alcotest.fail "expected TM104 for invalid subtree directive ID"
   | Error diags ->
     Alcotest.(check bool) "TM104 present" true

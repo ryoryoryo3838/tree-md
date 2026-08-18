@@ -11,9 +11,9 @@ plus the `test/fixtures/compat` fixture.
 
 ## Full-suite status
 
-- 20 Alcotest suites, **499 tests, all passing** (`dune runtest`).
+- 24 Alcotest suites, **567 tests, all passing** (`dune runtest`).
 - Cram scenario `cli.t` runs under `dune runtest` and passes.
-- All 26 stable diagnostic codes (`TM001`–`TM500`) are exercised by at least
+- All 27 stable diagnostic codes (`TM001`–`TM500`) are exercised by at least
   one test (verified by code search; see the Diagnostics section).
 - The checked-in golden fixture `test/fixtures/markdown/complete.tree.md` and
   its expected `test/fixtures/forester/complete.tree` were regenerated in the
@@ -38,6 +38,9 @@ plus the `test/fixtures/compat` fixture.
 
 ### Configuration (lines 171–196)
 
+`mdbase.yaml` is covered under mdbase conformance above; the table below is
+`tree-md.toml`.
+
 | Requirement | Test |
 | --- | --- |
 | `version`/`forest`/`sources`/`output`/`target` schema, required fields | `config_test.ml` (`missing_field`, `unknown_field`, `wrong_version`, `unsupported_target`) |
@@ -48,6 +51,7 @@ plus the `test/fixtures/compat` fixture.
 | `[id]` policy: defaults follow Forester's convention, overrides load, unusable alphabets/prefixes rejected | `config_test.ml` (`id_defaults`, `id_overrides`, `id_rejects_unusable_policy`) |
 | `build` mints into sources, reports what it gave, and converges; `check` stays read-only | `workspace_test.ml` (lifecycle suites, whose fixtures now state ids); `mint_test.ml` |
 | A stated `id` is never minted over; addresses avoid what is taken; front matter is created when absent and otherwise byte-preserved; minting converges | `mint_test.ml` (`states_id_is_left_alone`, `addresses_avoid_what_is_taken`, `inserts_into_existing_frontmatter`, `creates_frontmatter_when_absent`, `minting_converges`) |
+| `scheme` defaults to `random`; `sequential` starts at zero, matching the plugin that mints into the same namespace | `mint_test.ml` (`random_is_the_default`, `sequential_starts_at_zero`); `config_test.ml` (`id_defaults`) |
 | Minted addresses match the published Forester convention and are legal identities | `tree_id_test.ml` (`matches_forester_addresses`, `pads_and_widens`, `prefix_and_alphabet`, `result_is_a_valid_id`) |
 | Unsupported `target` is a configuration error | `cli.t/run.t` (`TM401` unsupported-target scenario, exit 2) |
 
@@ -57,18 +61,26 @@ plus the `test/fixtures/compat` fixture.
 | --- | --- |
 | Recursive scan, no symlink following, dot-leading components ignored | `discovery_test.ml` (`symlinks_skipped`, `hidden_source_root_skipped`, `symlinked_source_root`) |
 | Files end exactly in `.tree.md`; mirror to output | `discovery_test.ml` (`discovers_and_mirrors`); `forest_compile_test.ml` |
-| Root identity is filename stem; duplicate stems are errors | `discovery_test.ml` (`duplicate_stems`, `duplicate_handwritten_stems`); `forest_index_test.ml` (`duplicate_generated_roots`, `generated_versus_handwritten_root`) |
-| Identity grammar `[A-Za-z0-9][A-Za-z0-9._-]*` | `discovery_test.ml` (`invalid_root_stems`); `frontmatter_test.ml` (`valid_id`, `parse_attribution_bad_id`) |
+| A file name is a search key, so any stem is discovered | `discovery_test.ml` (`nonaddress_source_stems_accepted`, `duplicate_stems_accepted`) |
+| A handwritten `.tree` stem must still be an address, since Forester reads it as one | `discovery_test.ml` (`invalid_handwritten_stem`, `duplicate_handwritten_stems`) |
+| Root identity is the stated `id`, else the stem when it could be an address and is unshared | `forest_compile_test.ml` (`unaddressed_tree_tm206`, `unaddressed_tree_allowed_before_minting`); `forest_index_test.ml` (`duplicate_generated_roots`, `generated_versus_handwritten_root`) |
+| Address grammar `[A-Za-z0-9][A-Za-z0-9._-]*` | `frontmatter_test.ml` (`valid_id`, `parse_attribution_bad_id`) |
+| Target grammar: any file name minus `[ ] \| # ^ \\` | `wiki_test.ml` (`spaced_target_accepted`, `japanese_target_accepted`, `backslash_target_diagnostic`); `inline_test.ml` (`parse_wiki_bad_id`, `parse_wiki_japanese_target`) |
+| A title with no H1 falls back to the file name, not the identity | `outline_test.ml` (`title_falls_back_to_filename`) |
 
 ### YAML Front Matter (lines 228–277)
 
 | Requirement | Test |
 | --- | --- |
-| `---` delimiter rules; `...` not a delimiter; missing closing delimiter | `frontmatter_test.ml` (`missing_closing_delim`, `no_frontmatter`) |
-| One top-level mapping; scalar string keys; no duplicate keys/anchors/aliases/tags/multiple documents/unknown keys | `frontmatter_test.ml` (`duplicate_keys`, `unknown_keys`, `yaml_alias`, `multiple_documents`, `non_scalar_key_rejected`) |
+| Front matter ends at the FIRST closing fence; a later `---` is body | `frontmatter_test.ml` (`first_fence_closes_frontmatter`, `missing_closing_delim`, `no_frontmatter`) |
+| One top-level mapping; scalar string keys; no duplicate keys/anchors/aliases/tags/multiple documents | `frontmatter_test.ml` (`duplicate_keys`, `yaml_alias`, `non_scalar_key_rejected`) |
+| An uninterpreted key is carried, not rejected; a near miss warns; `x-` never warns | `frontmatter_test.ml` (`unknown_keys`, `misspelled_meta_key`, `extension_key_never_warns`) |
+| A shape cannot mislead the reader: a promoted key given a list | `frontmatter_test.ml` (`promoted_key_with_list_value`) |
+| A bare scalar stands for a one-element list, as Obsidian writes it | `frontmatter_test.ml` (`scalar_tags_accepted`) |
+| A value read as text keeps the bytes it was written as | `frontmatter_test.ml` (`scalar_text_is_preserved`) |
 | Date formats accepted/rejected (RFC 3339 subset) | `frontmatter_test.ml` (`valid_date_format`, `valid_date_invalid`) |
 | `taxon`, `authors`/`contributors` (`[[id]]` vs literal), `tags`, `meta` schema | `frontmatter_test.ml` (`valid_frontmatter`, `parse_attribution_tree`, `parse_attribution_literal`, `parse_attribution_bad_id`); `forest_index_test.ml` (`unresolved_attributions`) |
-| Meta names promoted to top-level keys; key set stays closed; one name set once | `frontmatter_test.ml` (`promoted_meta_keys`, `promoted_meta_mixed`, `duplicate_meta_key`, `misspelled_meta_key`) |
+| Meta names promoted to top-level keys; one name set once | `frontmatter_test.ml` (`promoted_meta_keys`, `promoted_meta_mixed`, `duplicate_meta_key`) |
 | Metadata values parsed as inline Markdown | `inline_test.ml` (`metadata_lower_meta`, `metadata_lower_tags`) |
 | YAML scalar span locations after escape decoding | `frontmatter_test.ml` (`tag_real_spans`); `inline_test.ml` (`metadata_lower_*`) |
 | Canonical metadata emission order independent of key order | `forester_6_test.ml` (`metadata_order`) |
@@ -93,7 +105,11 @@ plus the `test/fixtures/compat` fixture.
 | `[[id]]` → `[[id]]`; `[[id\|alias]]` → `[alias](id)` | `wiki_test.ml` (`simple_wiki_link`, `wiki_link_with_alias`, `wiki_embed`); `forester_6_test.ml` (`wiki_link_emission`, `wiki_link_alias_emission`) |
 | `![[id]]` standalone → `\transclude{id}`, no wrapper | `block_test.ml` (`embed_normalization`); `forester_6_test.ml` (`wiki_embed_emission`, `transclusion_no_extra_wrapper`) |
 | Embed placement errors (lists, blockquotes, ordinary paragraphs) | `block_test.ml` (`embed_in_list_rejected`, `embed_in_blockquote_rejected`, `embed_in_blockquote_list_rejected`, `inline_embed_rejected`, `text_and_embed_rejected`); `TM106` |
-| Invalid targets/aliases → `TM105` | `wiki_test.ml` (`bad_id_diagnostic`, `empty_alias_diagnostic`, `multiple_pipes_diagnostic`); `inline_test.ml` (`parse_wiki_bad_id`, `parse_wiki_empty_alias`, `parse_wiki_multi_pipe`) |
+| Invalid targets/aliases → `TM105` | `wiki_test.ml` (`backslash_target_diagnostic`, `empty_alias_diagnostic`, `multiple_pipes_diagnostic`); `inline_test.ml` (`parse_wiki_empty_alias`, `parse_wiki_multi_pipe`) |
+| A target may be spelled as a file name — spaces, any script | `wiki_test.ml` (`spaced_target_accepted`, `japanese_target_accepted`); `inline_test.ml` (`parse_wiki_bad_id`, `parse_wiki_japanese_target`); `forest_index_test.ml` (`nonascii_filename_resolves`) |
+| `.tree` and `.md` suffixes strip cumulatively; exact spelling wins | `forest_index_test.ml` (`tree_suffix_resolves`, `tree_suffix_exact_match_wins`, `md_suffix_resolves`) |
+| `[[folder/note]]` resolves path-style | `forest_index_test.ml` (`path_style_target_resolves`) |
+| A name reaching several files is settled by mdbase v0.3 §08 order | `forest_index_test.ml` (`ambiguous_filename_prefers_own_folder`); `cli.t/run.t` (the ambiguity warning) |
 | Unclosed Wiki stays literal; code/escaped text protected | `wiki_test.ml` (`unclosed_is_literal`, `code_span_not_wiki`, `escaped_not_wiki`, `double_backslash_is_wiki`, `three_backslashes_not_wiki`, `larger_bracket_run`, `right_bracket_run`, `left_bracket_run`) |
 | `[alias][[id]]` reference resolution (with/without definition); escaped with definition | `wiki_test.ml` (`reference_link_not_wiki`, `reference_with_definition`, `escaped_with_definition`) |
 | Cmarkit characterization gate (parser contract) | `wiki_test.ml` (entire suite — resolver idempotence `repeated_calls`, `second_call_same`); `source_test.ml` |
@@ -123,6 +139,42 @@ plus the `test/fixtures/compat` fixture.
 | HTML comments discarded | `block_test.ml` (`comment_discarded`); `compiler_test.ml` (`html_comment_inline_discarded`, `html_comment_block_discarded`) |
 | Reference-style links resolved before lowering | `wiki_test.ml` (`reference_with_definition`); `inline_test.ml` |
 | **Golden assertion covering every mapping** | `compiler_test.ml` (`golden_complete`: `fixtures/markdown/complete.tree.md` → `fixtures/forester/complete.tree`, byte-identical) + `roundtrip_deterministic` |
+
+### mdbase v0.3.0 conformance
+
+| Requirement | Test |
+| --- | --- |
+| A forest with no `mdbase.yaml` and no `_types/` is unchanged | `mdbase_config_test.ml` (`absent_file_is_the_defaults`); `mdbase_type_test.ml` (`absent_folder_is_no_types`) |
+| §04 settings are read and acted on | `mdbase_config_test.ml` (`settings_are_read`) |
+| §04 spec-version compatibility boundary is the minor component | `mdbase_config_test.ml` (`incompatible_spec_version`, `missing_spec_version`) |
+| §04 unknown config keys warn; `x-` never does; inert settings say so | `mdbase_config_test.ml` (`unknown_keys_warn`, `extension_keys_are_silent`, `inert_settings_warn`) |
+| §03 front matter is an arbitrary mapping in the JSON data model | `yaml_json_test.ml` (`scalar_resolution`, `quoted_is_string`, `text_is_preserved`) |
+| §06 non-JSON YAML values are rejected with a clear diagnostic | `yaml_json_test.ml` (`non_json_scalars_rejected`) |
+| §06 required keyword profile, and refusal of anything outside it | `json_schema_test.ml` (`profile` and `assertions` groups) |
+| §06 `format: date` / `date-time` / `time` assert RFC 3339 | `json_schema_test.ml` (`formats`) |
+| §07 regular-expression subset: no backreferences, no look-around | `json_schema_test.ml` (`unsupported_regex_refused`) |
+| §05 type files load; names conflict case-insensitively | `mdbase_type_test.ml` (`minimal_type_loads`, `duplicate_names_conflict`) |
+| §02 a non-type file under the types folder warns and is never a record | `mdbase_type_test.ml` (`non_type_file_warns`) |
+| A section tree-md does not act on is refused, not ignored | `mdbase_type_test.ml` (`unsupported_sections_refused`, `unsupported_collection_members_refused`, `match_expr_refused`) |
+| §07 selection: explicit declaration completes it; inferred rules otherwise | `mdbase_type_test.ml` (`explicit_declaration_wins`, `path_glob_selects`, `fields_present_and_where`) |
+| §07 `read_defaults` fill only missing keys; explicit null stays null | `yaml_json_test.ml` (`defaults_fill_only_missing`); `mdbase_type_test.ml` (`read_defaults`); `cli.t/run.t` |
+| Schema issues are reported at `settings.validation`'s severity, with a span and mdbase's code | `cli.t/run.t` (the mdbase scenario) |
+| RFC 6901 pointers locate the failing bytes | `yaml_json_test.ml` (`locate_points_at_the_value`, `locate_escapes`, `locate_missing_falls_back`) |
+
+### Markdown that HTML has an element for
+
+| Requirement | Test |
+| --- | --- |
+| `~~strikethrough~~` → `\<html:del>` | `inline_test.ml` (`strikethrough_lowered`); golden fixture |
+| `==highlight==` → `\<html:mark>`; never inside a code span | `inline_test.ml` (`highlight_lowered`, `highlight_ignored_in_code`); golden fixture |
+| `%%comment%%` discarded | `inline_test.ml` (`obsidian_comment_dropped`); golden fixture |
+| GFM table → `\<html:table>`, ragged rows padded, alignment as a cell style | `block_test.ml` (`gfm_table_lowered`); golden fixture |
+| Task items → a disabled checkbox | `block_test.ml` (`task_marker_lowered`); golden fixture |
+| Obsidian callout → Obsidian's own blockquote markup | golden fixture (`complete.tree.md` / `complete.tree`) |
+| Footnotes numbered by reference order; gathered at the end; unreferenced dropped | `block_test.ml` (`footnotes_numbered_by_reference`, `unreferenced_footnote_dropped`); golden fixture |
+| `![[x.png]]` embeds an attachment, found by name under the asset roots | `forest_index_test.ml` (assets); golden fixture |
+| A local Markdown link resolves as a tree reference; an external URL does not | `forest_index_test.ml` (`markdown_link_resolves`, `markdown_link_unresolved_errors`, `external_link_not_resolved`) |
+| Percent-encoding is idempotent and applied only on the way out | `inline_test.ml` (`parse_link_space_encoded`) |
 
 ### Rejected Markdown (lines 440–447)
 
@@ -168,6 +220,7 @@ plus the `test/fixtures/compat` fixture.
 | --- | --- |
 | Scheme allowlist (`http`, `https`, `mailto`, fragments, safe relative); `javascript`/`data` rejected | `inline_test.ml` (`uri_mailto_accepted`, `uri_fragment_accepted`, `uri_relative_accepted`, `uri_javascript_rejected`, `uri_data_image_rejected`, `parse_link_javascript_rejected`, `parse_image_data_rejected`, `uri_nul_rejected`); `TM205` |
 | External images only `http`/`https`; local assets resolve to exactly one asset root | `forest_index_test.ml` (`assets`, `single_match_routes`); `cli.t/run.t` (`TM203`, `TM204`); `TM205` |
+| An asset is looked up as written, not percent-encoded, so a non-ASCII or spaced name resolves | `forest_index_test.ml` (`nonascii_asset_resolves`, `spaced_asset_resolves`); `inline_test.ml` (`uri_percent_encode_space` asserts both spellings) |
 | Asset traversal rejection (`/`, `\`, NUL, empty, `.`, `..` segments) | `config_test.ml` (`relative_rejects_unsafe_paths`, `absolute_path`, `empty_segment`, `dot_segment`, `dot_dot_segment`, `backslash_path`) |
 | Output paths confined under the output root | `manifest_test.ml` (path checks); `workspace_fs_test.ml` (`symlink_refusal`) |
 
@@ -201,10 +254,11 @@ plus the `test/fixtures/compat` fixture.
 | Usage errors (missing/unknown command, unknown option) exit 2 | `cli.t/run.t` (three usage scenarios); `aae8d20` pinned behavior |
 | Backtrace hidden by default, shown with `TREE_MD_BACKTRACE=1`, `Out_of_memory`/`Sys.Break` re-raised | `cli_test.ml` (`exception filter` 0–3) |
 | `build`/`check` stdout/stderr contract | `cli.t/run.t` (summary line, silent clean check, stderr diagnostics) |
+| `--version` prints the package version; `--help` documents the commands and exit codes, asserted as `--help=plain` so the recorded output does not depend on whether groff and a pager are present | `cli.t/run.t` (`--version`, `--help=plain`) |
 
 ### Diagnostics (lines 707–764)
 
-All 26 stable codes are exercised:
+All 27 stable codes are exercised:
 
 | Code | Asserted in |
 | --- | --- |
@@ -223,6 +277,7 @@ All 26 stable codes are exercised:
 | `TM203` | `forest_index_test.ml`, `forest_compile_test.ml`, `cli.t/run.t` |
 | `TM204` | `forest_index_test.ml`, `forest_compile_test.ml`, `cli.t/run.t` |
 | `TM205` | `inline_test.ml`, `discovery_test.ml`, `forest_index_test.ml`, `cli_test.ml` |
+| `TM206` | `forest_compile_test.ml` (`unaddressed_tree_tm206`) |
 | `TM301` | `workspace_test.ml`, `cli.t/run.t` |
 | `TM302` | `workspace_test.ml`, `cli.t/run.t` |
 | `TM303` | `workspace_test.ml`, `cli_test.ml` |
@@ -273,6 +328,24 @@ line/column, tab width 4, path:line:column excerpts, deterministic sorting):
   `workspace_test.ml` (`second_build_noop`).
 - **No-write check guarantee**: `workspace_test.ml` (`first_check_missing_no_writes`,
   `clean_check_silent_identical_snapshots`); `cli.t/run.t` (silent clean check).
+- **Environment independence**: the two suites that write outside the build
+  directory resolve their scratch root with `Unix.realpath` at creation
+  (`workspace_test.ml`, `workspace_fs_test.ml` `tmpdir`), because the workspace
+  refuses an output root reached through a symbolic link and `$TMPDIR` is one on
+  macOS. The cram help assertion names the format (`--help=plain`) rather than
+  leaving it to `auto`, which renders through groff only where a pager exists.
+
+## Not covered by a test
+
+Behaviors the implementation has that no assertion currently pins down. They
+are listed so the gap is a recorded one rather than an assumed pass.
+
+| Behavior | Where it lives |
+| --- | --- |
+| Minting runs only after the forest compiles, so a build that fails leaves the sources unwritten | `workspace.ml` (`build`, the `compile` before `mint_addresses`) |
+| `check` never mints, so a tree that states no `id` is checked under its filename identity and reads as `TM301` until `build` addresses it | `workspace.ml` (`check` has no mint step) |
+| A build that rolls a journal forward does not mint on that pass | `workspace.ml` (`build`, recovery branch returns `minted = []`) |
+| NFC/NFD normalisation is not applied to file names, so a name macOS stored decomposed does not match a reference typed composed | `forest_index.ml` (`by_filename` compares bytes) |
 
 ## Compatibility Job
 

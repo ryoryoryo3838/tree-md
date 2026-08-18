@@ -31,6 +31,15 @@ rejected with a diagnostic and a source excerpt, rather than silently dropped or
 passed through. Every construct in the table below has a defined output; nothing
 else compiles.
 
+What it is *not* strict about is what you call your files. A file name is a
+search key, not an address: notes called `日本語のノート` or `My Note` are
+ordinary, and two folders may each hold a `note.tree.md`. The address a tree is
+published at is the `id` it states, or the one `build` mints for it.
+
+A few conditions are reported without failing the build. Those are **warnings**:
+they carry the same code, span, and excerpt as an error, but they never change
+the exit code and never stop a build from writing.
+
 `tree-md` is independent from Forester: no Forester code is linked. It targets
 the source language and CLI behavior of the `forester-6.0-dev` branch at commit
 `30b73641cef02433ee158db6ddc77f7b49de60be`.
@@ -43,6 +52,7 @@ the source language and CLI behavior of the `forester-6.0-dev` branch at commit
 
 ```markdown
 ---
+id: notes
 date: 2026-08-02
 taxon: Note
 authors:
@@ -162,13 +172,19 @@ assets = ["assets"]
 
 ```markdown
 ---
+id: index
 taxon: Note
 ---
 
 # Hello, forest
 
-This is my first tree, with a [[reference]] to another one.
+This is my first tree.
 ```
+
+`id` is the address the tree is published at, and naming it keeps this example
+short. Leave it out and `build` mints one — see
+[Minting an address](#minting-an-address). Every `[[link]]` you write has to
+resolve to a tree that exists, so add the targets before you link to them.
 
 **4. Build:**
 
@@ -195,14 +211,29 @@ This is the complete language reference. Anything not listed here is rejected.
 | --- | --- |
 | File extension | Exactly `.tree.md` |
 | Encoding | UTF-8, **no BOM** (a leading BOM is `TM003`) |
+| File name | Anything the filesystem allows. `日本語のノート.tree.md` and `My Note.tree.md` are ordinary, and the same stem may appear in two folders |
 | Discovery | Recursive; symlinks are not followed; paths with a dot-leading component are ignored |
 | Output path | Directory structure is mirrored, and the file is named by the identity — `trees-md/a/foo.tree.md` becomes `generated/a/foo.tree`, or `generated/a/mlnet-7.tree` if it states `id: mlnet-7` |
-| Tree identity | The `id` in front matter, or the **filename stem** (`foo`) if it states none — never the path (`a/foo`). Duplicate identities anywhere in the forest are an error |
+| Tree identity | The `id` in front matter; failing that the **filename stem** (`foo`), but only when that stem could be an address at all and no other tree answers to it — never the path (`a/foo`). Duplicate identities anywhere in the forest are an error |
+
+By default `build` writes an `id` into any tree that lacks one before naming the
+output, so the filename-stem fallback is what `check` sees, and what a build
+sees under `mint = "off"`. See [Minting an address](#minting-an-address).
+
+A tree with no address at all — because its file name could not be one, or
+because another file is called the same — is `TM206` wherever nothing is going
+to mint one, which is `check` and a build under `mint = "off"`.
 
 ## Front matter
 
 YAML front matter is optional. When present it must be the first thing in the
-file, delimited by `---`.
+file, delimited by `---`, and it must parse to a **mapping**.
+
+**Any key may appear.** Front matter is an arbitrary mapping, as mdbase v0.3
+§03 defines it; the table below is the part `tree-md` interprets, and every
+other key is carried and emitted nowhere. An Obsidian vault is full of
+`aliases`, `cssclasses`, `created` and `publish`, and none of them are this
+compiler's business.
 
 | Markdown front matter | Forester output |
 | --- | --- |
@@ -217,6 +248,14 @@ file, delimited by `---`.
 
 The distinction that matters: a value written as `"[[id]]"` becomes a **tree
 reference** and must resolve; anything else becomes a **literal** string.
+
+`tags`, `authors` and `contributors` accept a single bare scalar as well as a
+list, because that is how Obsidian writes one of something: `tags: compiler` is
+the same as `tags: [compiler]`.
+
+A value read as text keeps the bytes it was written as, so `taxon: 1.50` emits
+`\taxon{1.50}` rather than a float rendered back as `1.5`. An explicit null
+reads as absent: `taxon:` with nothing after it emits no `\taxon`.
 
 ### Promoted keys
 
@@ -233,8 +272,26 @@ external   slides        video   bibtex   author  toc     lang
 one name both ways is an error (`TM101`). `\meta` entries are emitted in source
 order regardless of which spelling was used.
 
-**The key set is closed.** An unrecognized key is `TM101`, so a misspelling is
-reported rather than silently emitted.
+### Unrecognized keys
+
+A key `tree-md` does not interpret is **carried, not rejected**. It appears in
+no output and fails nothing.
+
+The one exception is a key within an edit or two of one it does know. `taxo:`
+is far more likely a typo than a property, and dropping it in silence would
+lose a `\taxon{}` with nothing to show for it, so that case is reported:
+
+```console
+TM101 (schema_additional_properties): warning: unknown front matter key "taxo"; did you mean "taxon"?
+  --> trees-md/note.tree.md:5:1
+   |
+   | taxo: Note
+   | ^^^^
+```
+
+It is a **warning**, so the build still writes and still exits 0. A key in the
+`x-` extension namespace mdbase reserves for private use is never treated as a
+misspelling of anything.
 
 ### Minting an address
 
@@ -245,10 +302,10 @@ zero-padded to four digits — and is configurable:
 ```toml
 [id]
 alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"  # base 36
-width    = 4          # minimum digits; a larger number simply takes more
-scheme   = "random"       # or "sequential", for a forest with a single writer
+width    = 4        # minimum digits; a larger number simply takes more
+scheme   = "random" # or "sequential", for a forest with a single writer
 prefix   = ""
-mint     = "build"    # or "off", to have something else fulfil the requests
+mint     = "build"  # or "off", to have something else fulfil the requests
 ```
 
 `build` mints for every tree that states no `id`, writes it into the note's
@@ -256,9 +313,12 @@ front matter, and reports what it gave to what:
 
 ```console
 $ tree-md build
-minted: trees-md/scratch.tree.md -> 0001
+minted: /home/you/my-forest/trees-md/scratch.tree.md -> V0YI
 build: 1 created, 0 replaced, 0 deleted, 2 unchanged
 ```
+
+One `minted:` line per note. The path is the absolute one discovery resolved,
+so it names the file that was rewritten however the build was invoked.
 
 An address is a published URL, so a build that invents one says so rather than
 moving a tree in silence. **An address that is written is never minted over** —
@@ -267,7 +327,15 @@ alone. Minting is what empties the plan, so a second build has nothing to do.
 
 The addresses come from a real parse of the whole forest, not a guess, because
 minting a collision would publish two trees at one URL and the address would
-already be in the source by the time anything noticed.
+already be in the source by the time anything noticed. That parse is also the
+gate: minting runs only once the forest has compiled, so a build that fails
+rewrites nothing — not the outputs, and not your notes.
+
+`check` never mints, because it never writes. A tree that states no `id` is
+checked under its filename identity, so a note added since the last build is a
+missing output (`TM301`) until `build` gives it an address. A note whose file
+name could not be an address at all — `日本語のノート.tree.md`, `My Note.tree.md`
+— has no identity to be checked under, so it is `TM206` until then.
 
 `mint = "off"` leaves the requests standing for another tool to fulfil. Which
 address to hand out stays here either way: a forest should have one scheme, not
@@ -289,9 +357,10 @@ part-way through a build.
 
 ### Front matter and thematic breaks
 
-When a document has front matter, a `---` line is consumed as the YAML closing
-delimiter, so `---` inside the body is *not* a thematic break. Use `***` or
-`___` instead.
+Front matter ends at the **first** closing fence: the first unindented line
+after the opening that is exactly `---`, with nothing after it but whitespace.
+That is where Obsidian, Jekyll, Hugo and pandoc all end it. A later `---` is
+ordinary body, so `---`, `***` and `___` are all thematic breaks.
 
 ## Headings and subtrees
 
@@ -304,7 +373,7 @@ delimiter, so `---` inside the body is *not* a thematic break. Use `***` or
 | `<!-- h3 -->` | untitled `\subtree{ ... }` at level 3 |
 | `<!-- h3:ID -->` | untitled, named `\subtree[ID]{ ... }` at level 3 |
 | `<!-- /h3 -->` | closes every open subtree at level 3 or deeper |
-| no H1 present | `\title` falls back to the filename stem |
+| no H1 present | `\title` falls back to the **filename stem**, never to the identity — an address may be a minted number, and a number is not a title |
 
 Heading levels nest the way you would expect: an `##` opens a subtree, a
 following `###` nests inside it, and a second `##` closes the first and opens a
@@ -426,7 +495,12 @@ shape of the emitted tree with nothing to show for it.
 | `**strong**` | `\strong{strong}` |
 | `*emphasis*` | `\em{emphasis}` |
 | `` `code` `` | `\code{code}` |
+| `~~struck~~` | `\<html:del>{struck}` |
+| `==highlighted==` | `\<html:mark>{highlighted}` — Obsidian's highlight |
+| `%%comment%%` | *(nothing)* — Obsidian's comment, discarded like an HTML comment |
+| `[^1]` | `\<html:sup>[class]{footnote-ref}{…}` — see [Footnotes](#footnotes) |
 | `[label](https://example.test)` | `[label](https://example.test)` — native syntax, passed through |
+| `[label](note.md)` | `[label](mlnet-7)` — a **local** destination names a tree, see below |
 | `<https://example.test>` | native autolink |
 | line ending in two spaces | `\<html:br>{}` |
 | single newline inside a paragraph | a single space (soft break) |
@@ -442,7 +516,11 @@ shape of the emitted tree with nothing to show for it.
 | Ordered list starting at *n* ≠ 1 | `\<html:ol>[start]{n}{\li{...}}` |
 | Fenced or indented code, no language | `\<html:pre>{\<html:code>{...}}` |
 | Fenced code with a language | `\<html:pre>[class]{language-ocaml}{\<html:code>{...}}` |
-| `***` / `___` thematic break | `\<html:hr>{}` |
+| `---` / `***` / `___` thematic break | `\<html:hr>{}` |
+| GFM table | `\<html:table>` / `thead` / `tbody` / `tr` / `th` / `td`, alignment as `[style]{text-align: …}` |
+| `- [ ]` / `- [x]` task item | `\li{\<html:input>[type]{checkbox}[disabled]{disabled}…{} …}` |
+| `> [!note] Title` callout | `\<html:blockquote>[class]{callout}[data-callout]{note}{…}` |
+| `[^1]: …` footnote definition | gathered into the footnote section — see [Footnotes](#footnotes) |
 | `<!-- comment -->` | discarded |
 
 Tight and loose lists produce the same output; the distinction is not
@@ -474,10 +552,10 @@ that compiles.
 
 ### Identity, and the file it came from
 
-A tree's identity is its `id` if it states one, and its file name otherwise. An
-identity is emitted nowhere: it names the `.tree` that is written, which is
-where Forester reads it from. So `id: mlnet-7` in `a/note.tree.md` produces
-`a/mlnet-7.tree` and is addressed as `mlnet-7`.
+A tree's identity is its `id` if it states one. An identity is emitted nowhere:
+it names the `.tree` that is written, which is where Forester reads it from. So
+`id: mlnet-7` in `a/note.tree.md` produces `a/mlnet-7.tree` and is addressed as
+`mlnet-7`.
 
 Stating it is what lets the file be renamed — retitled, translated — without
 moving the address the published site and every existing reference use.
@@ -487,26 +565,72 @@ is what Obsidian autocompletes and writes. So a reference may name the file
 instead, and it resolves to the identity:
 
 ```markdown
-[[information-concept]]        →  [[mlnet-7]]
-[[information-concept.tree]]   →  [[mlnet-7]]
-[[mlnet-7]]                    →  [[mlnet-7]]
-![[information-concept]]       →  \transclude{mlnet-7}
+[[information-concept]]         →  [[mlnet-7]]
+[[information-concept.tree]]    →  [[mlnet-7]]
+[[information-concept.tree.md]] →  [[mlnet-7]]
+[[notes/information-concept]]   →  [[mlnet-7]]
+[[mlnet-7]]                     →  [[mlnet-7]]
+![[information-concept]]        →  \transclude{mlnet-7}
 ```
 
 Identities are tried before file names, so a tree whose `id` happens to match
 another tree's file name still wins.
 
-### The `.tree` suffix rule
+### Two vocabularies: addresses and targets
 
-A target ending in `.tree` that is not itself in the index is retried without
-that suffix. An Obsidian-style editor that addresses notes by filename sees
-`notes.tree.md` as `notes.tree` and writes `![[notes.tree]]`; that resolves to
-the tree `notes` and is emitted as `\transclude{notes}` — the identity, never
-the spelling.
+An **address** — a stated `id`, a subtree name, a `^anchor` — becomes a
+Forester address, and Forester reads an address off a file name it writes
+itself, so an address matches `[A-Za-z0-9][A-Za-z0-9._-]*`.
 
-The exact spelling is tried first, so a tree whose identity genuinely is
-`notes.tree` is not shadowed, and an unresolvable `[[missing.tree]]` is still a
-`TM202`.
+A **target** is only how a reference spells the thing it points at, and what
+Obsidian writes there is a file name. So `[[日本語のノート]]`, `[[My Note]]`
+and `[[people/alice]]` are all well-formed targets. What a target may not
+contain is what wiki syntax itself uses — `[`, `]`, `|`, `#`, `^` — or a
+backslash, which is never unescaped here. Whether a target names anything is
+settled by resolution, and an unresolvable one is still `TM202`.
+
+### Suffix and path rules
+
+An editor shows `notes.tree.md` as `notes.tree` and writes `[[notes.tree]]`;
+sometimes it writes the whole file name. Suffixes are stripped cumulatively, so
+`[[notes.tree.md]]`, `[[notes.tree]]` and `[[notes]]` all reach the tree
+`notes` and are all emitted as `[[notes]]` — the identity, never the spelling.
+
+A target carrying a `/` is resolved path-style against the source tree, so
+`[[people/alice]]` reaches `trees-md/people/alice.tree.md`.
+
+The exact spelling is always tried before any stripped one, so a tree whose
+identity genuinely is `notes.tree` is not shadowed, and an unresolvable
+`[[missing.tree]]` is still a `TM202`.
+
+### A Markdown link is a link too
+
+In Forester, `[label](addr)` is a tree reference, not a URL: there is no
+relative-link form. So a Markdown link whose destination is not an external
+URI names a tree, and it resolves exactly as a wiki link does — mdbase v0.3
+§08 counts one as a link too:
+
+```markdown
+[see](information-concept.md)   →  [see](mlnet-7)
+[see](notes/information-concept) →  [see](mlnet-7)
+[see](https://example.test)      →  unchanged, it is a URL
+```
+
+An unresolvable local destination is `TM202`. Passing it through untouched, as
+earlier versions did, put a reference to an address no tree has into the
+output and reported nothing.
+
+### When a name reaches more than one file
+
+Two folders may each hold a `note.tree.md`. A reference written `[[note]]` is
+then settled in the order mdbase v0.3 §08 fixes: the referring file's own
+folder first, then the shortest path, then alphabetical — so the answer never
+depends on the order the filesystem happened to return.
+
+Picking one of several is a decision you did not make, so it is said out loud:
+if the folder rule did not settle it, resolution still succeeds and reports a
+**warning** naming the target. Give one of the trees an `id:` and reference
+that to say which you mean.
 
 ### The subtree anchor rule
 
@@ -548,6 +672,21 @@ reported rather than producing broken `.tree` source.
 
 Fenced math blocks (` ```math `) are **not** supported.
 
+## Footnotes
+
+Forester has no footnote of its own, so a footnote becomes what HTML makes one:
+a superscript link into an ordered list at the end of the tree, with a link
+back.
+
+Footnotes are numbered by the order they are **first referred to**, not the
+order they are defined, so moving a definition never renumbers anything. The
+definitions are gathered into one section at the end of the tree however they
+were scattered through the note, and a definition nothing refers to renders
+nothing, so it is dropped.
+
+The section belongs to the note rather than to whichever subtree happened to be
+open when the document ran out, so every open subtree is closed before it.
+
 ## Images and assets
 
 | Markdown | Forester output |
@@ -560,6 +699,28 @@ declared in `forest.toml`'s `[forest].assets`. The file must actually exist
 under exactly one asset root: a missing asset is `TM203`, an ambiguous one that
 matches several roots is `TM204`, and an unsafe path (absolute, escaping, or
 with a hidden component) is `TM205`.
+
+The path is looked up as it was written, so an asset may be named anything the
+filesystem allows: `![図](images/日本語.png)` finds `日本語.png`. A destination
+containing a space needs CommonMark's angle-bracket form,
+`![Plot](<images/my plot.png>)`, because a bare space ends a link destination.
+Percent-encoding is applied to what is emitted for an *external* URL, never to
+what is searched for on disk.
+
+### Obsidian attachment embeds
+
+`![[diagram.png]]` embeds an attachment rather than transcluding a tree —
+settled by the extension, because an image has no address to transclude:
+
+| Markdown | Forester output |
+| --- | --- |
+| `![[diagram.png]]` | `\<html:img>[src]{\route-asset{assets/…/diagram.png}}[alt]{diagram.png}{}` |
+| `![[diagram.png\|300]]` | the same, plus `[width]{300}` |
+| `![[diagram.png\|A diagram]]` | the same, with `[alt]{A diagram}` |
+
+Obsidian writes just the file name, so a destination carrying no `/` is
+searched for **by name** under the asset roots. Exactly one file must answer to
+it: none is `TM203`, several is `TM204` and says to write the path instead.
 
 ## Escaping
 
@@ -582,7 +743,6 @@ errors, not warnings:
 | Rejected | Code |
 | --- | --- |
 | Raw inline or block HTML (other than comments) | `TM102` |
-| GFM tables, task lists, strikethrough, footnotes | `TM102` |
 | Fenced math blocks, any unrecognized Cmarkit extension | `TM102` |
 | H1 anywhere except the first block; duplicate H1 | `TM103` |
 | Skipped heading levels (`##` directly to `####`) | `TM103` |
@@ -594,7 +754,7 @@ errors, not warnings:
 | A subtree level outside `h2`–`h6` | `TM104` |
 | `<!-- /hN -->` with no open subtree at that level | `TM104` |
 | An untitled subtree with no content | `TM104` |
-| Malformed wiki link (`[[a\|b\|c]]`, invalid ID, empty alias) | `TM105` |
+| Malformed wiki link (`[[a\|b\|c]]`, a target containing `[ ] \| # ^ \\`, empty alias) | `TM105` |
 | Embeds inside lists, block quotes, or mixed into a paragraph | `TM106` |
 | Display math inside lists, block quotes, or mixed into a paragraph | `TM107` |
 
@@ -646,11 +806,140 @@ target  = "forester-6.0-dev@30b73641cef02433ee158db6ddc77f7b49de60be"
 | `sources` | Source roots to scan for `.tree.md`. Must be distinct |
 | `output` | Output root for generated `.tree`. Must not overlap a source root |
 | `target` | Compatibility profile. Any other value is a configuration error |
+| `[id]` | Optional table; the address policy `build` mints from. See [Minting an address](#minting-an-address) |
+
+The five top-level keys are required and the key set is closed, `[id]`
+included: an unknown key is `TM401` rather than a setting that quietly does
+nothing.
 
 All paths are relative to the directory containing `tree-md.toml`. The
 referenced `forest.toml` supplies `[forest].trees` and `[forest].assets`,
 relative to the directory containing `forest.toml`; the normalized output root
 must appear in `[forest].trees`.
+
+## mdbase
+
+A forest is also an [mdbase](https://github.com/mdbase-dev/mdbase-spec)
+collection, and `tree-md` reads what one declares. Nothing here is required:
+a forest with no `mdbase.yaml` and no `_types/` behaves exactly as it did
+before either existed.
+
+`tree-md` targets **mdbase v0.3.0**, pinned the way the Forester target is
+pinned. During major-zero the minor component is the compatibility boundary, so
+a collection declaring `0.2.x` or `0.4.x` is refused with a message naming the
+version this build supports.
+
+### `mdbase.yaml`
+
+```yaml
+spec_version: "0.3.0"
+
+settings:
+  validation: error      # off | warn | error
+  types_folder: _types
+  id_field: id
+  explicit_type_keys: [type, types]
+```
+
+| Setting | Effect here |
+| --- | --- |
+| `validation` | The severity a schema violation is reported at. `off` reports none; `warn` never fails a build |
+| `types_folder` | Where type files are looked for |
+| `id_field` | The key that holds a tree's address — read, and written by minting |
+| `explicit_type_keys` | The front-matter keys that declare a record's type |
+
+An unknown key is a **warning**, as §04 requires, and loading continues.
+`record_extensions`, `include_subfolders` and `exclude` decide nothing here —
+`tree-md` compiles the `.tree.md` files under the source roots named in
+`tree-md.toml` — so setting one says so rather than quietly having no effect.
+
+### Type files
+
+A type file pairs a rule for selecting records with a JSON Schema for
+validating them:
+
+```markdown
+---
+kind: mdbase.type
+name: note
+version: 1
+
+match:
+  path_glob: "trees-md/**/*.tree.md"
+
+schema:
+  dialect: json-schema-2020-12
+  value:
+    type: object
+    required: [status]
+    additionalProperties: true
+    properties:
+      status: { type: string, enum: [draft, published] }
+
+collection:
+  read_defaults:
+    taxon: Note
+---
+
+# Note
+
+Every note under `trees-md/` states a status.
+```
+
+The schema validates the front matter **as written**, and a violation carries
+mdbase's canonical code beside `tree-md`'s own:
+
+```console
+TM101 (schema_enum): error: /status: must be one of "draft", "published" (type "note")
+  --> trees-md/wrong.tree.md:3:9
+   |
+   | status: archived
+   |         ^^^^^^^^
+```
+
+`collection.read_defaults` then supplies a value for each key a record leaves
+**missing** — an explicit null stays null — and nothing is written back to the
+note. The example above publishes every note under `\taxon{Note}` without
+repeating it in any of them.
+
+### What is supported, and what is refused
+
+The JSON Schema profile is exactly §06's required list: `type`, `required`,
+`properties`, `additionalProperties`, `items`, `enum`, `const`, `oneOf`,
+`anyOf`, `allOf`, `if`/`then`/`else`, `minimum`, `maximum`,
+`exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`,
+`maxLength`, `pattern`, `minItems`, `maxItems`, `uniqueItems`, `$defs`, local
+`$ref`, and assertion behaviour for `format: date`, `date-time` and `time`.
+Lengths count characters. `pattern` uses §07's regular-expression subset:
+Unicode-aware, without backreferences or look-around.
+
+Anything outside that profile makes the schema fail to **compile**, rather
+than being ignored when a record is validated. A schema that silently means
+less than it says is worse than one that will not load: the collection would
+report itself valid on the strength of a constraint nothing checked.
+
+The same rule governs the type file's own sections. `match.path_glob`,
+`match.fields_present`, `match.where`, `collection.read_defaults`,
+`collection.display` and any `x-` extension are supported. These are refused,
+each with a message saying what `tree-md` does instead:
+
+| Section | Why |
+| --- | --- |
+| `collection.unique` | `tree-md` enforces address uniqueness across the whole forest itself, as `TM201` |
+| `collection.links` | Every reference is resolved closed-world already, and an unresolved one is `TM202` |
+| `collection.path` | An output is named after the tree's address |
+| `collection.projections`, `match.expr` | Need the CEL profile, which `tree-md` does not implement (`unsupported_profile`) |
+| `lifecycle` | Addresses are minted from the `[id]` policy in `tree-md.toml` |
+| `runtime`, `migrations`, `implements` | `tree-md` runs no workflows, migrates nothing, and loads no data contracts |
+
+### tree-md's own reading is separate
+
+A declared schema says what the *collection* considers a valid record.
+`tree-md` separately reads the keys it emits — `id`, `date`, `taxon`,
+`authors`, `contributors`, `tags`, `meta` — and what it reports about those is
+about what it can put into a `.tree`, not about validity. So an unusable
+`date:` is still an error at `validation: off`: there is no `\date{}` to emit
+for it either way.
 
 ## Generated-file safety
 
@@ -682,6 +971,13 @@ enforced rather than assumed.
 
 Every diagnostic has a stable code, a severity, a source span, and an excerpt.
 
+Severity is `error` or `warning`. **Only errors decide the exit code**, and only
+an error stops a build from writing; a warning is reported and stepped over. The
+class table below is what an *error* of that range exits with.
+
+Where mdbase v0.3 defines a canonical code for the same condition, it is
+rendered alongside — `TM101 (schema_additional_properties): warning: …`.
+
 | Range | Class | Exit |
 | --- | --- | --- |
 | `TM0xx` | Source encoding and front matter syntax | 1 |
@@ -711,6 +1007,7 @@ Every diagnostic has a stable code, a severity, a source span, and an excerpt.
 | `TM203` | Missing asset |
 | `TM204` | Ambiguous asset (matches multiple asset roots) |
 | `TM205` | Unsafe asset or source path |
+| `TM206` | Tree has no address, and its file name cannot be one |
 | `TM301` | Missing generated output |
 | `TM302` | Modified generated output (hash mismatch) |
 | `TM303` | Stale generated output |
@@ -740,7 +1037,7 @@ TM003: error: file begins with a UTF-8 byte order mark; remove it
 
 ```bash
 dune build              # build
-dune runtest            # 18 Alcotest suites (444 cases) + cram scenarios
+dune runtest            # 20 Alcotest suites (500 cases) + cram scenarios
 dune pkg lock           # refresh the pinned dependency closure
 ```
 
@@ -768,6 +1065,8 @@ and `test/fixtures/forester/` hold the golden input/output pair.
 
 [MIT](./LICENSE) © ryoryoryo3838
 
-No third-party source is vendored into this repository, and no linked
-dependency carries a copyleft obligation. See [`DEPENDENCIES.md`](./DEPENDENCIES.md)
-for the full audit.
+No third-party source is vendored into this repository. Two linked packages
+carry an LGPL expression — `menhirLib` and `re` — and both carry the explicit
+`OCaml-LGPL-linking-exception`, the same exception the OCaml runtime itself
+carries, so neither imposes a copyleft obligation. See
+[`DEPENDENCIES.md`](./DEPENDENCIES.md) for the full audit.

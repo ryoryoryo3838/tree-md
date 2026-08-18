@@ -58,6 +58,21 @@ break
 
 ![Plot](images/x.png)
 
+GFM and Obsidian marks: ~~struck~~, ==highlighted==, %%hidden%% and a
+footnote[^note].
+
+- [ ] not done
+- [x] done
+
+| left | centre | right |
+| :--- | :----: | ----: |
+| a | b | c |
+
+> [!warning] Take care
+> The callout body.
+
+[^note]: The footnote body.
+
 <!-- /h2 -->
 
 Back in the root body, after the named section closed.

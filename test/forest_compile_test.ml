@@ -1,5 +1,10 @@
 open Tree_md
 
+(* Each compile stage now returns its warnings alongside the value it
+   produced. These suites assert on the value, so they drop the warnings. *)
+let compile_forest config discovery =
+  Result.map fst (Compiler.compile_forest config discovery)
+
 let contains haystack needle =
   let needle_length = String.length needle in
   let rec loop i =
@@ -71,7 +76,7 @@ let check_record (record : Compiler.expected) ~source ~source_config_relative
 
 let test_multi_document_forest () =
   let config, discovery = load_and_scan "workspaces/compile" in
-  match Compiler.compile_forest config discovery with
+  match compile_forest config discovery with
   | Error diagnostics ->
     Alcotest.fail (render_diagnostics "multi-document forest rejected" diagnostics)
   | Ok expecteds ->
@@ -100,7 +105,7 @@ let test_multi_document_forest () =
        Alcotest.(check bool) "routed asset path emitted" true
          (contains second.bytes "\\route-asset{assets/images/x.png}");
        (* determinism: byte-identical output across two calls *)
-       (match Compiler.compile_forest config discovery with
+       (match compile_forest config discovery with
         | Error diagnostics ->
           Alcotest.fail (render_diagnostics "second compile rejected" diagnostics)
         | Ok again ->
@@ -114,7 +119,7 @@ let test_multi_document_forest () =
 
 let test_bad_forest_diagnostics () =
   let config, discovery = load_and_scan "workspaces/compile-bad" in
-  match Compiler.compile_forest config discovery with
+  match compile_forest config discovery with
   | Ok _ -> Alcotest.fail "bad forest compiled without diagnostics"
   | Error diagnostics ->
     Alcotest.(check (list string))
@@ -187,10 +192,10 @@ let test_symlinked_source_rejected () =
               config_relative = relative "linked.tree.md";
               source_relative = relative "linked.tree.md";
               output_relative = relative "linked.tree";
-              root_id = "linked" } ];
+              filename = "linked" } ];
         handwritten_roots = [] }
     in
-    match Compiler.compile_forest config discovery with
+    match compile_forest config discovery with
     | Ok _ -> Alcotest.fail "symlinked source compiled"
     | Error diagnostics ->
       Alcotest.(check (list string)) "TM404 for symlinked source"
@@ -216,10 +221,10 @@ let test_bom_rejected () =
               config_relative = relative "bom.tree.md";
               source_relative = relative "bom.tree.md";
               output_relative = relative "bom.tree";
-              root_id = "bom" } ];
+              filename = "bom" } ];
         handwritten_roots = [] }
     in
-    match Compiler.compile_forest config discovery with
+    match compile_forest config discovery with
     | Ok _ -> Alcotest.fail "source with a UTF-8 BOM compiled"
     | Error diagnostics ->
       Alcotest.(check (list string)) "TM003 for leading BOM"
@@ -242,16 +247,60 @@ let test_no_bom_still_compiles () =
               config_relative = relative "plain.tree.md";
               source_relative = relative "plain.tree.md";
               output_relative = relative "plain.tree";
-              root_id = "plain" } ];
+              filename = "plain" } ];
         handwritten_roots = [] }
     in
-    match Compiler.compile_forest config discovery with
+    match compile_forest config discovery with
     | Error diagnostics ->
       Alcotest.fail (render_diagnostics "BOM-free source rejected" diagnostics)
     | Ok [ record ] ->
       Alcotest.(check string) "H1 becomes the root title"
         "\\title{BOM Title}\n\\p{Body.}\n" record.Compiler.bytes
     | Ok _ -> Alcotest.fail "expected exactly one compiled record")
+
+(* A file name that could not be a Forester address leaves the tree without
+   one. That is TM206 wherever nothing is going to mint one — `check`, and a
+   build with mint = "off" — and tolerated only by the compile that runs just
+   before minting, which is about to fix it. *)
+let unaddressed_discovery root ~stem =
+  let source = Filename.concat root (stem ^ ".tree.md") in
+  let channel = open_out_bin source in
+  output_string channel "# 見出し\n\n本文。\n";
+  close_out channel;
+  { Discovery.sources =
+      [ { Discovery.source_root = root;
+          path = source;
+          config_relative = relative (stem ^ ".tree.md");
+          source_relative = relative (stem ^ ".tree.md");
+          output_relative = relative (stem ^ ".tree");
+          filename = stem } ];
+    handwritten_roots = [] }
+
+let test_unaddressed_tree_tm206 () =
+  with_temp_dir (fun root ->
+    let config = make_config ~root in
+    let discovery = unaddressed_discovery root ~stem:"日本語のノート" in
+    match compile_forest config discovery with
+    | Ok _ -> Alcotest.fail "tree with no possible address compiled"
+    | Error diagnostics ->
+      Alcotest.(check (list string)) "TM206 for an unaddressed tree"
+        [ "TM206" ]
+        (List.map (fun d -> Diagnostic.code_string d.Diagnostic.code) diagnostics);
+      Alcotest.(check bool) "message names the file" true
+        (contains (List.hd diagnostics).Diagnostic.message "日本語のノート"))
+
+let test_unaddressed_tree_allowed_before_minting () =
+  with_temp_dir (fun root ->
+    let config = make_config ~root in
+    let discovery = unaddressed_discovery root ~stem:"日本語のノート" in
+    match
+      Result.map fst
+        (Compiler.compile_forest ~allow_pending:true config discovery)
+    with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "pre-mint compile rejected" diagnostics)
+    | Ok records ->
+      Alcotest.(check int) "the forest still compiles" 1 (List.length records))
 
 let () =
   let open Alcotest in
@@ -262,5 +311,8 @@ let () =
         test_case "symlinked_source_rejected" `Quick test_symlinked_source_rejected;
         test_case "bom_rejected" `Quick test_bom_rejected;
         test_case "no_bom_still_compiles" `Quick test_no_bom_still_compiles;
+        test_case "unaddressed_tree_tm206" `Quick test_unaddressed_tree_tm206;
+        test_case "unaddressed_tree_allowed_before_minting" `Quick
+          test_unaddressed_tree_allowed_before_minting;
       ]
     ]

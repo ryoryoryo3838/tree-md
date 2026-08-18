@@ -48,7 +48,7 @@ let source root name =
     config_relative = relative ("trees-md/" ^ name ^ ".tree.md");
     source_relative = relative (name ^ ".tree.md");
     output_relative = relative (name ^ ".tree");
-    root_id = name }
+    filename = name }
 
 let discovery root names =
   { Discovery.sources = List.map (source root) names; handwritten_roots = [] }

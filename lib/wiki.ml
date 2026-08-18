@@ -211,11 +211,13 @@ let wiki_diagnostics body source_path info =
        "multiple unescaped pipes in wiki body"]
   else
     let target, alias = parse_wiki_body body in
-    let note, fragment = split_fragment target in
+    let note, fragment = split_fragment (String.trim target) in
     let target_diags =
       match fragment with
       | None ->
-        if Metadata.valid_id note then []
+        (* A target names a file, not an address, so it may be anything a file
+           name can be. Whether it names a tree is resolution's question. *)
+        if Metadata.valid_link_target note then []
         else
           [Diagnostic.make TM105 (Span.Source_span span)
              ("invalid wiki target: \"" ^ note ^ "\"")]
@@ -230,7 +232,7 @@ let wiki_diagnostics body source_path info =
           if not (Metadata.valid_id id) then
             [Diagnostic.make TM105 (Span.Source_span span)
                ("invalid subtree anchor: \"^" ^ id ^ "\"")]
-          else if note <> "" && not (Metadata.valid_id note) then
+          else if note <> "" && not (Metadata.valid_link_target note) then
             [Diagnostic.make TM105 (Span.Source_span span)
                ("invalid wiki target: \"" ^ note ^ "\"")]
           else [])
@@ -379,7 +381,7 @@ let validate_wiki_body ~source_path ~info =
     let target, alias = parse_wiki_body body in
     (* What comes out is the identity, never the spelling: `note#^id` resolves
        to the subtree `id`, and the note that located it is dropped. *)
-    let note, fragment = split_fragment target in
+    let note, fragment = split_fragment (String.trim target) in
     let identity =
       match Option.bind fragment anchor_id with
       | Some id -> id

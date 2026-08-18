@@ -27,6 +27,11 @@ type definition = { id : string; span : Span.t }
 val blocks : content list -> Ir.block list
 val subtrees : content list -> section list
 
-val build : root_id:string -> Ir.document -> (t, Diagnostic.t list) result
+(* [filename] is the source's stem. A document with no H1 takes its title from
+   it rather than from [root_id]: the address may be a minted number, and a
+   number is exactly what a title must not be. *)
+val build :
+  root_id:string -> filename:string -> Ir.document ->
+  (t * Diagnostic.t list, Diagnostic.t list) result
 
 val definitions : t -> definition list
