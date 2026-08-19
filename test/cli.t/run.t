@@ -9,6 +9,7 @@ fixtures are available next to the cram directory.
   $ cp -rL ../fixtures/workspaces/compile-bad source-bad
   $ cp -rL ../fixtures/workspaces/unicode unicode
   $ cp -rL ../fixtures/workspaces/mdbase mdbase
+  $ cp -rL ../fixtures/workspaces/publish publish
 
 --version prints the package version and exits 0.
 
@@ -240,4 +241,27 @@ is an effective value: nothing is written back to the note.
   \taxon{Note}
   $ grep -c taxon mdbase/trees-md/wrong.tree.md
   0
+  [1]
+
+`[publish].from` names the trees a build starts from, and everything they
+reach comes with them. A note nobody publishes is not compiled at all, so the
+broken link in the diary does not fail the build for the pages that are.
+
+  $ tree-md build --config publish/tree-md.toml
+  build: 3 created, 0 replaced, 0 deleted, 0 unchanged, 1 unpublished
+  $ find publish/generated -name '*.tree' | sort
+  publish/generated/PUBLIC/index.tree
+  publish/generated/PUBLIC/notes.tree
+  publish/generated/private/frege.tree
+
+Without the table every source is published, and the draft's broken link is a
+`TM202` like any other.
+
+  $ sed '/^\[publish\]/,$d' publish/tree-md.toml > publish/all.toml
+  $ tree-md check --config publish/all.toml
+  TM202: error: unresolved wiki link "存在しないノート"
+    --> $TESTCASE_ROOT/publish/trees-md/DAILY/2026-08-19.tree.md:7:1
+     |
+     | [[存在しないノート]]
+     | ^^^^^^^^^^^^
   [1]

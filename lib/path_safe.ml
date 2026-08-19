@@ -17,6 +17,34 @@ let relative path =
 
 let to_string path = path
 
+(* `**` crosses separators, `*` and `?` do not. The shape mdbase v0.3 §07 uses
+   for `match.path_glob`, and the one `[publish].from` selects with. *)
+let glob_matches ~pattern candidate =
+  let plen = String.length pattern and clen = String.length candidate in
+  let rec go p c =
+    if p >= plen then c >= clen
+    else
+      match pattern.[p] with
+      | '*' when p + 1 < plen && pattern.[p + 1] = '*' ->
+        let next = if p + 2 < plen && pattern.[p + 2] = '/' then p + 3 else p + 2 in
+        let rec try_from i =
+          if go next i then true else if i >= clen then false else try_from (i + 1)
+        in
+        (* `a/**/b` also matches `a/b`, so the skipped run may be empty. *)
+        go next c || try_from c
+      | '*' ->
+        let rec try_from i =
+          if go (p + 1) i then true
+          else if i >= clen || candidate.[i] = '/' then false
+          else try_from (i + 1)
+        in
+        try_from c
+      | '?' -> c < clen && candidate.[c] <> '/' && go (p + 1) (c + 1)
+      | ch -> c < clen && candidate.[c] = ch && go (p + 1) (c + 1)
+  in
+  go 0 0
+
+
 let append first second = first ^ "/" ^ second
 
 let basename path =

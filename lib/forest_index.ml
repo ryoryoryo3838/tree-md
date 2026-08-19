@@ -110,7 +110,7 @@ let handwritten_definitions (handwritten : Discovery.handwritten_root list)
         location = Span.Path root.Discovery.path })
     handwritten
 
-let build ~handwritten ~generated =
+let assemble ~tolerant ~handwritten ~generated =
   let all =
     handwritten_definitions handwritten
     @ List.concat_map generated_definitions generated
@@ -141,6 +141,11 @@ let build ~handwritten ~generated =
           Diagnostic.make ~secondary TM201 first.location
             ("duplicate identity \"" ^ id ^ "\"")
         in
+        (* A tolerant index keeps the first definition so that the pass which
+           only needs to know where a reference lands can still run. Two
+           private notes sharing an address must not stop the site from
+           working out what is public. *)
+        let index = if tolerant then StringMap.add id first index else index in
         (diagnostic :: diags, index)
       | [] -> (diags, index)
     ) grouped ([], StringMap.empty)
@@ -181,8 +186,19 @@ let build ~handwritten ~generated =
              StringMap.add stem (entry :: existing) table))
       StringMap.empty generated
   in
-  if diags = [] then Ok { by_id = index; by_filename; all_files }
+  if tolerant || diags = [] then Ok { by_id = index; by_filename; all_files }
   else Error (List.sort Diagnostic.compare diags)
+
+let build ~handwritten ~generated =
+  assemble ~tolerant:false ~handwritten ~generated
+
+(* An index that keeps going when two trees share an identity. Only the pass
+   that works out which trees are published uses it: that pass runs before
+   anything is reported, and two notes nobody publishes must not stop it. *)
+let build_tolerant ~handwritten ~generated =
+  match assemble ~tolerant:true ~handwritten ~generated with
+  | Ok index -> index
+  | Error _ -> { by_id = StringMap.empty; by_filename = StringMap.empty; all_files = [] }
 
 (* ── resolve: reference and asset validation per document ── *)
 
@@ -328,6 +344,32 @@ let resolve_target index ~from target =
           | Some (file, ambiguous) when StringMap.mem file.id by_id ->
             Some (file.id, ambiguous)
           | Some _ | None -> None))
+
+(* The identity a reference lands on, without asking which file owns it: when
+   two trees share an address the owner is exactly what is not yet settled, and
+   the pass that walks the reference graph must pull in both so that the
+   duplicate is reported rather than silently picked between. *)
+let resolve_reference index ~from target =
+  match resolve_target index ~from target with
+  | None -> None
+  | Some (id, _ambiguous) -> Some id
+
+(* The file a name would land in if the index has not heard of it: an editor
+   writes file names, and a source that failed to parse contributes no
+   identity, so without this a note that is broken looks merely absent. *)
+let source_of_filename sources target =
+  let candidates = spellings target in
+  List.find_map
+    (fun spelling ->
+      List.find_opt
+        (fun (record : Discovery.source_file) ->
+          String.equal record.Discovery.filename spelling
+          || String.equal
+               (Path_safe.to_string record.Discovery.source_relative)
+               (spelling ^ ".tree.md"))
+        sources
+      |> Option.map (fun (record : Discovery.source_file) -> record.Discovery.path))
+    candidates
 
 let check_references index (doc : Parsed_document.t) (diags, resolution) =
   let from = doc.Parsed_document.outline.Outline.span.Span.path in

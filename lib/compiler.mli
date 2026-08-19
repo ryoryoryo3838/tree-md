@@ -24,6 +24,15 @@ val load_mdbase : Config.t -> (mdbase * Diagnostic.t list, Diagnostic.t list) re
 
 (* [collection_path] is the source's path relative to the collection root,
    which is what a type's `match.path_glob` is matched against. *)
+(* What a compile produced: the outputs the published trees name, and how many
+   sources `[publish].from` left out. The count is reported rather than the
+   list, because a vault that is mostly private would otherwise say so on every
+   line of every build. *)
+type forest = {
+  outputs : expected list;
+  unpublished : int;
+}
+
 val parse :
   ?mdbase:mdbase -> ?collection_path:string ->
   default_id:string -> filename:string -> Source.t ->
@@ -45,4 +54,4 @@ val identities :
    compile after minting — an unaddressed tree is TM206. *)
 val compile_forest :
   ?allow_pending:bool -> ?mdbase:mdbase -> Config.t -> Discovery.t ->
-  (expected list * Diagnostic.t list, Diagnostic.t list) result
+  (forest * Diagnostic.t list, Diagnostic.t list) result

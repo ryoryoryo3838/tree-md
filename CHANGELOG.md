@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `[publish].from` in `tree-md.toml` names the trees a build starts from, as
+  globs relative to a source root; everything those reach transitively comes
+  with them. A whole Obsidian vault can then be the source without the whole
+  vault becoming the site: a published page may link to a note kept anywhere,
+  and that note is published because it is linked to. An unpublished note is
+  not compiled at all — not emitted, and not reported on, so a draft with a
+  broken link cannot fail the build for the pages that do not carry it — and
+  the count appears in the build summary so that one you meant to publish and
+  forgot to link does not vanish in silence. A source the pattern names is
+  compiled even if it does not parse, and a reference landing on an address
+  two trees share pulls in both, so the collision is `TM201` rather than
+  decided by which path sorts first. Minting follows publication. Without the
+  table every source is published, as before.
+
 - tree-md reads what a collection declares as an
   [mdbase](https://github.com/mdbase-dev/mdbase-spec) v0.3.0 collection.
   `mdbase.yaml` supplies `settings.validation` (the severity a schema

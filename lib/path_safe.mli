@@ -2,6 +2,10 @@ type relative
 
 val relative : string -> (relative, string) result
 val to_string : relative -> string
+
+(* Glob matching over a `/`-separated path: `**` crosses separators, `*` and
+   `?` do not. Used by mdbase's `match.path_glob` and by `[publish].from`. *)
+val glob_matches : pattern:string -> string -> bool
 val append : relative -> relative -> relative
 val basename : relative -> string
 val resolve : base:string -> relative -> string

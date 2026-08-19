@@ -3,6 +3,9 @@ type summary = {
   replaced : int;
   deleted : int;
   unchanged : int;
+  (* Sources `[publish].from` left out. Reported as a count so that a vault
+     which is mostly private does not say so on every line of every build. *)
+  unpublished : int;
 }
 
 type result = {

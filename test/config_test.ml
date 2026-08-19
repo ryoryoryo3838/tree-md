@@ -308,6 +308,74 @@ let test_syntax_error_is_path_prefixed () =
       Alcotest.fail (Printf.sprintf "expected one diagnostic, got %d"
                        (List.length diagnostics)))
 
+(* ── [publish].from ── *)
+
+(* Absent means every source is published, which is what every forest did
+   before the table existed. *)
+let test_publish_absent_publishes_everything () =
+  with_temp_project valid_tree_md valid_forest (fun path ->
+    match Config.load ~path with
+    | Error diagnostics ->
+      Alcotest.fail
+        ("valid config rejected: "
+         ^ String.concat "; "
+             (List.map (fun d -> d.Diagnostic.message) diagnostics))
+    | Ok config ->
+      Alcotest.(check (list string)) "no selection" [] config.Config.publish_from)
+
+let test_publish_from_is_read () =
+  with_temp_project
+    (valid_tree_md ^ "\n[publish]\nfrom = [\"PUBLIC/**\", \"notes/*.tree.md\"]\n")
+    valid_forest
+    (fun path ->
+      match Config.load ~path with
+      | Error diagnostics ->
+        Alcotest.fail
+          ("publish table rejected: "
+           ^ String.concat "; "
+               (List.map (fun d -> d.Diagnostic.message) diagnostics))
+      | Ok config ->
+        Alcotest.(check (list string)) "patterns in order"
+          [ "PUBLIC/**"; "notes/*.tree.md" ] config.Config.publish_from)
+
+(* The table's presence is what turns selection on, so a table naming nothing
+   would publish nothing — never what was meant. *)
+let test_publish_from_must_name_something () =
+  with_temp_project (valid_tree_md ^ "\n[publish]\nfrom = []\n") valid_forest
+    (fun path -> expect_tm401 "empty from" (Config.load ~path));
+  with_temp_project (valid_tree_md ^ "\n[publish]\n") valid_forest
+    (fun path -> expect_tm401 "missing from" (Config.load ~path));
+  with_temp_project (valid_tree_md ^ "\n[publish]\nfrom = [\"\"]\n") valid_forest
+    (fun path -> expect_tm401 "empty pattern" (Config.load ~path))
+
+let test_publish_key_set_is_closed () =
+  with_temp_project
+    (valid_tree_md ^ "\n[publish]\nfrom = [\"a/**\"]\nexcept = [\"b/**\"]\n")
+    valid_forest
+    (fun path -> expect_tm401 "unknown publish key" (Config.load ~path))
+
+let test_publish_from_must_be_strings () =
+  with_temp_project (valid_tree_md ^ "\n[publish]\nfrom = [1]\n") valid_forest
+    (fun path -> expect_tm401 "non-string pattern" (Config.load ~path))
+
+(* ── glob matching ── *)
+
+let test_glob_matches () =
+  let matches pattern candidate = Path_safe.glob_matches ~pattern candidate in
+  Alcotest.(check bool) "** crosses separators" true
+    (matches "PUBLIC/**" "PUBLIC/a/b.tree.md");
+  Alcotest.(check bool) "** may skip nothing" true
+    (matches "PUBLIC/**" "PUBLIC/b.tree.md");
+  Alcotest.(check bool) "a/**/b reaches a/b" true (matches "a/**/b" "a/b");
+  Alcotest.(check bool) "* stops at a separator" false
+    (matches "PUBLIC/*.tree.md" "PUBLIC/a/b.tree.md");
+  Alcotest.(check bool) "* within one segment" true
+    (matches "PUBLIC/*.tree.md" "PUBLIC/b.tree.md");
+  Alcotest.(check bool) "? is one character, not a separator" false
+    (matches "a?b" "a/b");
+  Alcotest.(check bool) "a prefix is not a match" false
+    (matches "PUBLIC/**" "PUBLICITY/a.tree.md")
+
 let () =
   let open Alcotest in
   run "Config"
@@ -337,5 +405,13 @@ let () =
         test_case "non_string_tree_member" `Quick test_non_string_tree_member;
         test_case "non_string_asset_member" `Quick test_non_string_asset_member;
         test_case "syntax_error_is_path_prefixed" `Quick test_syntax_error_is_path_prefixed;
+        test_case "publish_absent_publishes_everything" `Quick
+          test_publish_absent_publishes_everything;
+        test_case "publish_from_is_read" `Quick test_publish_from_is_read;
+        test_case "publish_from_must_name_something" `Quick
+          test_publish_from_must_name_something;
+        test_case "publish_key_set_is_closed" `Quick test_publish_key_set_is_closed;
+        test_case "publish_from_must_be_strings" `Quick test_publish_from_must_be_strings;
+        test_case "glob_matches" `Quick test_glob_matches;
       ]
     ]

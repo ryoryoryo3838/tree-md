@@ -33,6 +33,7 @@ let config root =
     source_roots = [ (relative "trees-md", Filename.concat root "trees-md") ];
     output_root = (relative "generated", Filename.concat root "generated");
     target = Forester_6.target;
+     publish_from = [];
     id = Config.default_id_policy }
 
 (* The default is random, which no assertion about particular addresses can

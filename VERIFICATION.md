@@ -11,7 +11,7 @@ plus the `test/fixtures/compat` fixture.
 
 ## Full-suite status
 
-- 24 Alcotest suites, **571 tests, all passing** (`dune runtest`).
+- 24 Alcotest suites, **581 tests, all passing** (`dune runtest`).
 - Cram scenario `cli.t` runs under `dune runtest` and passes.
 - All 27 stable diagnostic codes (`TM001`–`TM500`) are exercised by at least
   one test (verified by code search; see the Diagnostics section).
@@ -139,6 +139,18 @@ plus the `test/fixtures/compat` fixture.
 | HTML comments discarded | `block_test.ml` (`comment_discarded`); `compiler_test.ml` (`html_comment_inline_discarded`, `html_comment_block_discarded`) |
 | Reference-style links resolved before lowering | `wiki_test.ml` (`reference_with_definition`); `inline_test.ml` |
 | **Golden assertion covering every mapping** | `compiler_test.ml` (`golden_complete`: `fixtures/markdown/complete.tree.md` → `fixtures/forester/complete.tree`, byte-identical) + `roundtrip_deterministic` |
+
+### Publishing part of a vault
+
+| Requirement | Test |
+| --- | --- |
+| `[publish].from` parsing; closed key set; a table naming nothing is refused | `config_test.ml` (`publish_from_is_read`, `publish_key_set_is_closed`, `publish_from_must_name_something`, `publish_from_must_be_strings`) |
+| Absent table publishes every source | `config_test.ml` (`publish_absent_publishes_everything`) |
+| Glob semantics: `**` crosses separators, `*` and `?` do not | `config_test.ml` (`glob_matches`) |
+| Named trees and what they reach are compiled; the rest is counted | `forest_compile_test.ml` (`publish_from_selects_and_reaches`); `cli.t/run.t` |
+| An unpublished note is not reported on | `forest_compile_test.ml` (`unpublished_diagnostics_are_dropped`); `cli.t/run.t` |
+| A named source that does not parse is still reported | `forest_compile_test.ml` (`published_entry_still_reports`) |
+| A reference onto a shared address pulls in both owners | `forest_compile_test.ml` (`duplicate_identity_is_not_silently_picked`) |
 
 ### mdbase v0.3.0 conformance
 

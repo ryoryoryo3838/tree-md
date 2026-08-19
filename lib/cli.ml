@@ -93,8 +93,13 @@ let print_minted (minted : Mint.minted list) =
   if minted <> [] then flush stdout
 
 let print_build_summary (summary : Workspace.summary) =
-  Printf.printf "build: %d created, %d replaced, %d deleted, %d unchanged\n"
+  Printf.printf "build: %d created, %d replaced, %d deleted, %d unchanged"
     summary.created summary.replaced summary.deleted summary.unchanged;
+  (* Only when a build is selective. A forest that publishes everything has
+     nothing to say here, and saying "0 unpublished" would imply it might. *)
+  if summary.unpublished > 0 then
+    Printf.printf ", %d unpublished" summary.unpublished;
+  print_newline ();
   flush stdout
 
 (* ── top-level exception filter ──

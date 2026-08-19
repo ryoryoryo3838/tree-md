@@ -14,7 +14,7 @@ let str_contains s sub =
   sublen <= len && loop 0
 
 let zero_summary : Workspace.summary =
-  { created = 0; replaced = 0; deleted = 0; unchanged = 0 }
+  { created = 0; replaced = 0; deleted = 0; unchanged = 0; unpublished = 0 }
 
 let result_of codes =
   { Workspace.summary = zero_summary;

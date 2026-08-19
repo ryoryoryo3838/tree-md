@@ -60,10 +60,17 @@ let next_free (policy : Config.id_policy) taken used =
     search 0
 
 (* [id_field] is `settings.id_field` from mdbase.yaml; it defaults to `id`. *)
-let plan ?(id_field = "id") config ~taken discovery =
+(* [publishing] is the set of sources this build carries. A note the site does
+   not publish is not this build's to rewrite. *)
+let plan ?(id_field = "id") ?publishing config ~taken discovery =
+  let carries path =
+    match publishing with None -> true | Some paths -> List.mem path paths
+  in
   let policy = config.Config.id in
   let rec loop acc used = function
     | [] -> Ok (List.rev acc)
+    | (record : Discovery.source_file) :: rest when not (carries record.Discovery.path) ->
+      loop acc used rest
     | (record : Discovery.source_file) :: rest -> (
       match read_file record.Discovery.path with
       | Error diagnostics -> Error diagnostics

@@ -368,6 +368,15 @@ let make_expected (record : Discovery.source_file) root_id bytes =
     bytes;
     sha256 = sha256_hex bytes }
 
+(* What a compile produced: the outputs the published trees name, and how many
+   sources `[publish].from` left out. The count is reported rather than the
+   list, because a vault that is mostly private would otherwise say so on every
+   line of every build. *)
+type forest = {
+  outputs : expected list;
+  unpublished : int;
+}
+
 let compare_expected (a : expected) (b : expected) =
   let by_output =
     String.compare (Path_safe.to_string a.output_relative)
@@ -454,6 +463,109 @@ let tm206 (record : Discovery.source_file) =
 (* [allow_pending] is set only for the compile that precedes minting. That
    compile exists to prove the forest is sound before anything is rewritten,
    and a tree waiting for an address is exactly what it is about to fix. *)
+(* ── which trees a build publishes ──
+
+   `[publish].from` names the trees a build starts from, and everything they
+   reach transitively comes with them. It exists so that a whole Obsidian vault
+   can be the source without the whole vault becoming the site: the notes a
+   published page links to are published because they are linked to, and the
+   rest is simply not compiled — not emitted, and not reported on either, since
+   a draft nobody publishes must not fail the build for the pages that are.
+
+   Reachability is computed here rather than in the script that syncs the vault
+   because only the compiler knows what a reference resolves to: aliases,
+   `#^anchors`, the `.tree` and `.md` suffixes, path-style targets, and the
+   order in which an identity beats a file name. A script guessing at those
+   would either leak a private note or drop a published link. *)
+let published_sources config (discovery : Discovery.t) records =
+  match config.Config.publish_from with
+  | [] -> None
+  | patterns ->
+    let entry (record : Discovery.source_file) =
+      let relative = Path_safe.to_string record.Discovery.source_relative in
+      List.exists (fun pattern -> Path_safe.glob_matches ~pattern relative) patterns
+    in
+    let index =
+      Forest_index.build_tolerant
+        ~handwritten:discovery.Discovery.handwritten_roots
+        ~generated:(List.rev_map snd records)
+    in
+    let documents = Hashtbl.create 64 in
+    List.iter
+      (fun ((record : Discovery.source_file), document) ->
+        Hashtbl.replace documents record.Discovery.path document)
+      records;
+    (* Every source that defines an identity, not just the first. A reference
+       onto a duplicated address pulls in all of them, so that the collision is
+       reported rather than silently decided by which path sorts first. *)
+    let owners = Hashtbl.create 64 in
+    List.iter
+      (fun ((record : Discovery.source_file), (document : Parsed_document.t)) ->
+        let path = record.Discovery.path in
+        let add id =
+          let existing = Option.value ~default:[] (Hashtbl.find_opt owners id) in
+          if not (List.mem path existing) then
+            Hashtbl.replace owners id (path :: existing)
+        in
+        add document.Parsed_document.outline.Outline.root_id;
+        List.iter
+          (fun (definition : Outline.definition) -> add definition.Outline.id)
+          document.Parsed_document.definitions)
+      records;
+    let published = Hashtbl.create 64 in
+    let pending = Queue.create () in
+    let discover path =
+      if not (Hashtbl.mem published path) then begin
+        Hashtbl.replace published path ();
+        Queue.add path pending
+      end
+    in
+    (* A source that matched a pattern is published even if it did not parse:
+       it was put in a published folder, so its diagnostics are the writer's
+       business. *)
+    List.iter
+      (fun (record : Discovery.source_file) ->
+        if entry record then discover record.Discovery.path)
+      discovery.Discovery.sources;
+    while not (Queue.is_empty pending) do
+      let path = Queue.pop pending in
+      match Hashtbl.find_opt documents path with
+      | None -> ()
+      | Some (document : Parsed_document.t) ->
+        List.iter
+          (fun (reference : Ir.reference) ->
+            match
+              Forest_index.resolve_reference index ~from:path reference.Ir.target
+            with
+            | Some id when Hashtbl.mem owners id ->
+              List.iter discover (Hashtbl.find owners id)
+            | Some _ | None -> (
+              (* The index has not heard of it. It may be a source that failed
+                 to parse, which contributes no identity; pulling it in is what
+                 turns "unresolved" into the error that actually explains. *)
+              match
+                Forest_index.source_of_filename discovery.Discovery.sources
+                  reference.Ir.target
+              with
+              | Some target -> discover target
+              | None -> ()))
+          document.Parsed_document.references
+    done;
+    Some published
+
+let is_published published path =
+  match published with None -> true | Some set -> Hashtbl.mem set path
+
+(* A diagnostic belongs to the file its primary location names. *)
+let diagnostic_is_published published (diagnostic : Diagnostic.t) =
+  match published with
+  | None -> true
+  | Some set -> (
+    match diagnostic.Diagnostic.primary with
+    | Span.Source_span span -> Hashtbl.mem set span.Span.path
+    | Span.Path path -> Hashtbl.mem set path
+    | Span.No_location -> true)
+
 let compile_forest ?(allow_pending = false) ?mdbase config discovery =
   let loaded =
     match mdbase with
@@ -476,6 +588,27 @@ let compile_forest ?(allow_pending = false) ?mdbase config discovery =
          | Ok (parsed, warnings) -> (warnings @ diags, parsed :: records))
     ) ([], []) discovery.Discovery.sources
   in
+  (* Everything above ran over every source, because reachability cannot be
+     known before the references are. From here on only the published ones
+     count. *)
+  let published = published_sources config discovery records in
+  let unpublished =
+    match published with
+    | None -> 0
+    | Some set ->
+      List.length
+        (List.filter
+           (fun (record : Discovery.source_file) ->
+             not (Hashtbl.mem set record.Discovery.path))
+           discovery.Discovery.sources)
+  in
+  let records =
+    List.filter
+      (fun ((record : Discovery.source_file), _) ->
+        is_published published record.Discovery.path)
+      records
+  in
+  let parse_diags = List.filter (diagnostic_is_published published) parse_diags in
   let pending_diags =
     if allow_pending then []
     else
@@ -486,9 +619,10 @@ let compile_forest ?(allow_pending = false) ?mdbase config discovery =
           else None)
         records
   in
-  (* Provisional index from the documents that parsed: valid documents still
-     get reference and asset validation, while parse diagnostics from the
-     other sources are reported independently. *)
+  (* Index from the documents that parsed and are published: a valid document
+     still gets reference and asset validation, while parse diagnostics from
+     the other sources are reported independently. An unpublished tree is
+     invisible here, so it can neither be reached nor collide with one. *)
   let documents = List.rev_map snd records in
   let stage_diags, resolutions =
     match
@@ -509,4 +643,6 @@ let compile_forest ?(allow_pending = false) ?mdbase config discovery =
     List.sort Diagnostic.compare
       (mdbase_warnings @ parse_diags @ pending_diags @ stage_diags @ emit_diags)
   in
-  Diagnostic.gate (List.sort compare_expected expecteds) diagnostics
+  Diagnostic.gate
+    ({ outputs = List.sort compare_expected expecteds; unpublished })
+    diagnostics

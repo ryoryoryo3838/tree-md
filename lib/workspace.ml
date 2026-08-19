@@ -22,6 +22,9 @@ type summary = {
   replaced : int;
   deleted : int;
   unchanged : int;
+  (* Sources `[publish].from` left out. Reported as a count so that a vault
+     which is mostly private does not say so on every line of every build. *)
+  unpublished : int;
 }
 
 type result = {
@@ -33,7 +36,8 @@ type result = {
   diagnostics : Diagnostic.t list;
 }
 
-let zero_summary = { created = 0; replaced = 0; deleted = 0; unchanged = 0 }
+let zero_summary =
+  { created = 0; replaced = 0; deleted = 0; unchanged = 0; unpublished = 0 }
 
 let tm path code message = Diagnostic.make code (Span.Path path) message
 
@@ -340,7 +344,8 @@ let check ~config_path =
            | Ok discovery ->
              (match Compiler.compile_forest config discovery with
               | Error diagnostics -> report (base_diags () @ diagnostics)
-              | Ok (expecteds, warnings) ->
+              | Ok (forest, warnings) ->
+                let expecteds = forest.Compiler.outputs in
                 (match start_snapshot.Workspace_fs.manifest with
                  | Some bytes ->
                    (match Manifest.decode ~path:(manifest_path output_root) bytes with
@@ -655,7 +660,9 @@ let count_summary (transaction : Transaction.t) expected_count ~restored =
   { created = created + restored;
     replaced;
     deleted;
-    unchanged = expected_count - created - replaced - restored }
+    unchanged = expected_count - created - replaced - restored;
+    (* The caller knows what was left unpublished; this only counts files. *)
+    unpublished = 0 }
 
 let normal_build config expecteds =
   let output_root = snd config.Config.output_root in
@@ -736,7 +743,7 @@ let compile ?(allow_pending = false) config =
   | Ok discovery ->
     (match Compiler.compile_forest ~allow_pending config discovery with
      | Error diagnostics -> Error diagnostics
-     | Ok (expecteds, warnings) -> Ok (expecteds, discovery, warnings))
+     | Ok (forest, warnings) -> Ok (forest, discovery, warnings))
 
 (* Digest of every file a compile consumes: the compiler configuration, the
    forest configuration, every discovered source, and every handwritten root.
@@ -787,7 +794,7 @@ let lock_and_build config f =
    The identities come from a real parse of the whole forest rather than a
    guess, because minting a collision would publish two trees at one URL — and
    the address is in the source by the time anything could notice. *)
-let mint_addresses config discovery =
+let mint_addresses config discovery ~publishing =
   match config.Config.id.Config.mint with
   | Config.Off -> Ok []
   | Config.By_build -> (
@@ -800,7 +807,7 @@ let mint_addresses config discovery =
     match Compiler.identities ~mdbase config discovery with
     | Error diagnostics -> Error diagnostics
     | Ok taken -> (
-      match Mint.plan ~id_field config ~taken discovery with
+      match Mint.plan ~id_field ~publishing config ~taken discovery with
       | Error diagnostics -> Error diagnostics
       | Ok [] -> Ok []
       | Ok planned -> (
@@ -829,9 +836,10 @@ let build ~config_path =
          lock_and_build config (fun () ->
            match
              (let* () = recover output_root in
-              let* expecteds, _discovery, warnings = compile config in
-              let* summary = normal_build config expecteds in
-              Ok (summary, warnings))
+              let* forest, _discovery, warnings = compile config in
+              let* summary = normal_build config forest.Compiler.outputs in
+              Ok ({ summary with unpublished = forest.Compiler.unpublished },
+                  warnings))
            with
            | Error diagnostics -> report diagnostics
            | Ok (summary, warnings) ->
@@ -847,19 +855,28 @@ let build ~config_path =
          in
          match compile ~allow_pending config with
          | Error diagnostics -> report diagnostics
-         | Ok (first_expecteds, first_discovery, first_warnings) ->
+         | Ok (first_forest, first_discovery, first_warnings) ->
          (* Addresses are handed out only to a forest that compiles, and the
-            recompile is what turns them into the outputs' names. *)
-         match mint_addresses config first_discovery with
+            recompile is what turns them into the outputs' names. Only a tree
+            this build publishes is given one: a note the site does not carry
+            is not this build's to rewrite. *)
+         let publishing =
+           List.map
+             (fun (e : Compiler.expected) -> e.Compiler.source_path)
+             first_forest.Compiler.outputs
+         in
+         match mint_addresses config first_discovery ~publishing with
          | Error diagnostics -> report diagnostics
          | Ok minted ->
          match
            (if minted = [] then
-              Ok (first_expecteds, first_discovery, first_warnings)
+              Ok (first_forest, first_discovery, first_warnings)
             else compile config)
          with
          | Error diagnostics -> report diagnostics
-         | Ok (expecteds, discovery, warnings) ->
+         | Ok (forest, discovery, warnings) ->
+           let expecteds = forest.Compiler.outputs in
+           let unpublished = forest.Compiler.unpublished in
            let pre_digests = input_digests config discovery in
            lock_and_build config (fun () ->
              match
@@ -871,9 +888,10 @@ let build ~config_path =
                     (* a concurrent writer crashed while we compiled without
                        the lock: recover before compiling current source *)
                     (let* () = recover output_root in
-                     let* expecteds, _discovery, warnings = compile config in
-                     let* summary = normal_build config expecteds in
-                     Ok (summary, warnings))
+                     let* forest, _discovery, warnings = compile config in
+                     let* summary = normal_build config forest.Compiler.outputs in
+                     Ok ({ summary with unpublished = forest.Compiler.unpublished },
+                         warnings))
                   else
                     let inputs_changed =
                       match pre_digests with
@@ -883,12 +901,13 @@ let build ~config_path =
                         || not (rescan_unchanged config discovery)
                     in
                     if inputs_changed then
-                      let* expecteds, _discovery, warnings = compile config in
-                      let* summary = normal_build config expecteds in
-                      Ok (summary, warnings)
+                      let* forest, _discovery, warnings = compile config in
+                      let* summary = normal_build config forest.Compiler.outputs in
+                      Ok ({ summary with unpublished = forest.Compiler.unpublished },
+                          warnings)
                     else
                       let* summary = normal_build config expecteds in
-                      Ok (summary, warnings))
+                      Ok ({ summary with unpublished }, warnings))
              with
              | Error diagnostics -> report diagnostics
              | Ok (summary, warnings) ->

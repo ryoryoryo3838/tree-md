@@ -7,7 +7,7 @@
 type minted = { path : string; id : string }
 
 val plan :
-  ?id_field:string ->
+  ?id_field:string -> ?publishing:string list ->
   Config.t -> taken:string list -> Discovery.t -> (minted list, Diagnostic.t list) result
 (** Which sources have no address, and what each would be given. Reads only.
     [id_field] is `settings.id_field` from mdbase.yaml, defaulting to [id]. *)

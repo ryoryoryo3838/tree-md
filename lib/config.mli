@@ -34,6 +34,9 @@ type t = {
   output_root : Path_safe.relative * string;
   target : string;
   id : id_policy;
+  (* `[publish].from`: the source-root-relative globs a build starts from.
+     Empty means the table was absent, and every source is published. *)
+  publish_from : string list;
 }
 
 val load : path:string -> (t, Diagnostic.t list) result

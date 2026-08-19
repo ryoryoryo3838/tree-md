@@ -810,6 +810,7 @@ target  = "forester-6.0-dev@30b73641cef02433ee158db6ddc77f7b49de60be"
 | `output` | Output root for generated `.tree`. Must not overlap a source root |
 | `target` | Compatibility profile. Any other value is a configuration error |
 | `[id]` | Optional table; the address policy `build` mints from. See [Minting an address](#minting-an-address) |
+| `[publish]` | Optional table; which trees a build starts from. See [Publishing part of a vault](#publishing-part-of-a-vault) |
 
 The five top-level keys are required and the key set is closed, `[id]`
 included: an unknown key is `TM401` rather than a setting that quietly does
@@ -819,6 +820,55 @@ All paths are relative to the directory containing `tree-md.toml`. The
 referenced `forest.toml` supplies `[forest].trees` and `[forest].assets`,
 relative to the directory containing `forest.toml`; the normalized output root
 must appear in `[forest].trees`.
+
+## Publishing part of a vault
+
+A vault is not a site. Most of what you write is not meant to be published,
+and moving a note between "public" and "private" by moving the file is how
+that is usually kept straight.
+
+```toml
+[publish]
+# Paths are relative to a source root. Only the trees these name, and the
+# trees those reach, are compiled.
+from = ["MIYA-LIS.NET/**"]
+```
+
+`**` crosses directory separators; `*` and `?` do not.
+
+Everything the named trees reach comes with them, transitively — through wiki
+links, embeds, `authors:` attributions, and Markdown links that resolve. So a
+published page may link to a note kept anywhere in the vault, and that note is
+published because it is linked to:
+
+```text
+MIYA-LIS.NET/index.tree.md    named by the pattern
+MIYA-LIS.NET/notes.tree.md    named by the pattern
+notes/frege.tree.md           reached by ![[frege.tree]] in notes
+DAILY/2026-08-19.tree.md      neither: not compiled
+```
+
+**An unpublished note is not compiled at all** — not emitted, and not reported
+on. A draft with a broken link must not fail the build for the pages that do
+not carry it. The count appears in the summary so that a note you meant to
+publish and forgot to link does not vanish in silence:
+
+```console
+$ tree-md build
+build: 10 created, 0 replaced, 0 deleted, 0 unchanged, 34 unpublished
+```
+
+Two things stay the writer's business rather than being quietly skipped. A
+source the pattern names is compiled even if it does not parse: you put it in
+a published folder. And when a reference lands on an address two trees share,
+**both** are pulled in, so the collision is reported as `TM201` rather than
+decided by which path happens to sort first.
+
+Minting follows publication: a tree this build does not carry is not this
+build's to rewrite.
+
+Without the table, every source under the source roots is published, which is
+what a forest did before the table existed.
 
 ## mdbase
 

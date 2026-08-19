@@ -59,36 +59,6 @@ let unsupported_collection_members =
     ("projections", "projections need the CEL profile, which tree-md does not \
                      implement") ]
 
-(* ── glob matching (§07 match.path_glob) ── *)
-
-(* `**` crosses separators, `*` and `?` do not. *)
-let glob_matches pattern candidate =
-  let plen = String.length pattern and clen = String.length candidate in
-  let rec go p c =
-    if p >= plen then c >= clen
-    else
-      match pattern.[p] with
-      | '*' when p + 1 < plen && pattern.[p + 1] = '*' ->
-        let next = if p + 2 < plen && pattern.[p + 2] = '/' then p + 3 else p + 2 in
-        let rec try_from i =
-          if go next i then true
-          else if i >= clen then false
-          else try_from (i + 1)
-        in
-        (* `a/**/b` also matches `a/b`, so the skipped run may be empty. *)
-        go next c || try_from c
-      | '*' ->
-        let rec try_from i =
-          if go (p + 1) i then true
-          else if i >= clen || candidate.[i] = '/' then false
-          else try_from (i + 1)
-        in
-        try_from c
-      | '?' -> c < clen && candidate.[c] <> '/' && go (p + 1) (c + 1)
-      | ch -> c < clen && candidate.[c] = ch && go (p + 1) (c + 1)
-  in
-  go 0 0
-
 (* ── reading a type file ── *)
 
 let ( let* ) = Result.bind
@@ -534,7 +504,9 @@ let predicate_holds value predicate =
 let matches declared ~collection_path ~frontmatter =
   declared.has_match
   && (declared.path_globs = []
-      || List.exists (fun glob -> glob_matches glob collection_path) declared.path_globs)
+      || List.exists
+           (fun glob -> Path_safe.glob_matches ~pattern:glob collection_path)
+           declared.path_globs)
   && List.for_all
        (fun selector ->
          match json_field frontmatter selector with

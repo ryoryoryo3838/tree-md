@@ -45,6 +45,7 @@ let make_config ~root ~sources ~tree_roots ~asset_roots ~output =
      source_roots = pairs sources;
      output_root = (relative output, resolve root output);
      target = Forester_6.target;
+     publish_from = [];
      id = Config.default_id_policy;
    } : Config.t)
 

@@ -417,7 +417,11 @@ let test_build_interrupted_journal_roll_forward () =
       | Error ds -> fail_errs ds
     in
     let expecteds =
-      match Result.map fst (Compiler.compile_forest config discovery) with
+      match
+        Result.map
+          (fun (forest, _) -> forest.Compiler.outputs)
+          (Compiler.compile_forest config discovery)
+      with
       | Ok e -> e
       | Error ds -> fail_errs ds
     in

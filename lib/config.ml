@@ -45,6 +45,7 @@ type t = {
   output_root : Path_safe.relative * string;
   target : string;
   id : id_policy;
+  publish_from : string list;
 }
 
 let ( let* ) = Result.bind
@@ -192,6 +193,35 @@ let has_duplicate_chars s =
   in
   loop 0
 
+(* `[publish].from` selects which trees a build starts from. Everything else
+   under the source roots is compiled only if one of those reaches it, so a
+   vault can be the source without the whole vault becoming the site.
+
+   An empty list is not the same as an absent table: the table's presence is
+   what turns selection on, and a table naming nothing would publish nothing,
+   which is never what was meant. *)
+let publish_from path fields =
+  match List.assoc_opt "publish" fields with
+  | None -> Ok []
+  | Some (Otoml.TomlTable publish_fields | Otoml.TomlInlineTable publish_fields) ->
+    let* () = check_closed path [ "from" ] publish_fields in
+    (match List.assoc_opt "from" publish_fields with
+     | None -> diagnostic path "publish.from is required when [publish] is present"
+     | Some (Otoml.TomlArray values) ->
+       let rec collect acc = function
+         | [] -> Ok (List.rev acc)
+         | Otoml.TomlString value :: rest ->
+           if value = "" then diagnostic path "publish.from entries may not be empty"
+           else collect (value :: acc) rest
+         | _ -> diagnostic path "publish.from must be an array of strings"
+       in
+       let* patterns = collect [] values in
+       if patterns = [] then
+         diagnostic path "publish.from names nothing, so nothing would be published"
+       else Ok patterns
+     | Some _ -> diagnostic path "publish.from must be an array of strings")
+  | Some _ -> diagnostic path "publish must be a table"
+
 let id_policy path fields =
   match List.assoc_opt "id" fields with
   | None -> Ok default_id_policy
@@ -256,7 +286,10 @@ let load ~path =
   let* contents = read_file path in
   let* value = parse path contents in
   let* fields = table_fields path value in
-  let* () = check_closed path ["version"; "forest"; "sources"; "output"; "target"; "id"] fields in
+  let* () =
+    check_closed path
+      ["version"; "forest"; "sources"; "output"; "target"; "id"; "publish"] fields
+  in
   let* version = require_field path "version" fields in
   let* () =
     match version with
@@ -290,6 +323,7 @@ let load ~path =
   in
   let forest_path = Path_safe.resolve ~base:directory forest_reference in
   let* id = id_policy path fields in
+  let* publish_from = publish_from path fields in
   let* forest = load_forest forest_path in
   let* () = check_output_tree path (snd output_root) forest.tree_roots in
   Ok {
@@ -300,4 +334,5 @@ let load ~path =
     output_root;
     target;
     id;
+    publish_from;
   }
