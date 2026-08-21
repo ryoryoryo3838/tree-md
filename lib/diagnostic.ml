@@ -1,9 +1,9 @@
-type severity = Error
+type severity = Error | Warning
 
 type code =
   | TM001 | TM002 | TM003
   | TM101 | TM102 | TM103 | TM104 | TM105 | TM106 | TM107
-  | TM201 | TM202 | TM203 | TM204 | TM205
+  | TM201 | TM202 | TM203 | TM204 | TM205 | TM206
   | TM301 | TM302 | TM303 | TM304 | TM305 | TM306
   | TM401 | TM402 | TM403 | TM404 | TM500
 
@@ -12,14 +12,31 @@ type labelled_location = { label : string; location : Span.location }
 type t = {
   severity : severity;
   code : code;
+  mdbase_code : string option;
   message : string;
   primary : Span.location;
   secondary : labelled_location list;
   notes : string list;
 }
 
-let make ?(secondary = []) ?(notes = []) code primary message =
-  { severity = Error; code; message; primary; secondary; notes }
+let make ?(secondary = []) ?(notes = []) ?mdbase_code code primary message =
+  { severity = Error; code; mdbase_code; message; primary; secondary; notes }
+
+let warn ?(secondary = []) ?(notes = []) ?mdbase_code code primary message =
+  { severity = Warning; code; mdbase_code; message; primary; secondary; notes }
+
+let is_error diag = diag.severity = Error
+let has_error diags = List.exists is_error diags
+
+(* Warnings travel with the value; a single error discards it. Every stage
+   accumulates into one list and gates once, so a file reports all of its
+   diagnostics rather than stopping at the first. *)
+(* [Error] here is the severity constructor, which shadows [Result.Error], so
+   the result constructors are named through Stdlib. *)
+let gate value diags =
+  if has_error diags then Stdlib.Error diags else Stdlib.Ok (value, diags)
+
+let severity_string = function Error -> "error" | Warning -> "warning"
 
 let code_string = function
   | TM001 -> "TM001" | TM002 -> "TM002" | TM003 -> "TM003"
@@ -27,7 +44,7 @@ let code_string = function
   | TM104 -> "TM104" | TM105 -> "TM105" | TM106 -> "TM106"
   | TM107 -> "TM107"
   | TM201 -> "TM201" | TM202 -> "TM202" | TM203 -> "TM203"
-  | TM204 -> "TM204" | TM205 -> "TM205"
+  | TM204 -> "TM204" | TM205 -> "TM205" | TM206 -> "TM206"
   | TM301 -> "TM301" | TM302 -> "TM302" | TM303 -> "TM303"
   | TM304 -> "TM304" | TM305 -> "TM305" | TM306 -> "TM306"
   | TM401 -> "TM401" | TM402 -> "TM402" | TM403 -> "TM403"
@@ -114,8 +131,13 @@ let render ~sources diag =
     | Span.Path p -> p
     | Span.No_location -> "<no location>"
   in
+  let code =
+    match diag.mdbase_code with
+    | None -> code
+    | Some mdbase -> Printf.sprintf "%s (%s)" code mdbase
+  in
   Printf.bprintf buf "%s: %s: %s\n" code
-    (match diag.severity with Error -> "error") diag.message;
+    (severity_string diag.severity) diag.message;
   Printf.bprintf buf "  --> %s\n" loc_str;
   (match diag.primary with
    | Span.Source_span s ->

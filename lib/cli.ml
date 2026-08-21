@@ -17,14 +17,18 @@ let code_class = function
   | Diagnostic.TM104 | Diagnostic.TM105 | Diagnostic.TM106
   | Diagnostic.TM107
   | Diagnostic.TM201 | Diagnostic.TM202 | Diagnostic.TM203
-  | Diagnostic.TM204 | Diagnostic.TM205
+  | Diagnostic.TM204 | Diagnostic.TM205 | Diagnostic.TM206
   | Diagnostic.TM301 | Diagnostic.TM302 | Diagnostic.TM303
   | Diagnostic.TM304 | Diagnostic.TM305 | Diagnostic.TM306 -> 1
 
-let exit_code { Workspace.summary = _; diagnostics } =
+(* Only errors decide the exit code. A warning is reported and stepped over,
+   so a forest that compiles with warnings still exits 0 and still builds. *)
+let exit_code { Workspace.summary = _; diagnostics; _ } =
   List.fold_left
     (fun worst diagnostic ->
-      max worst (code_class diagnostic.Diagnostic.code))
+      if Diagnostic.is_error diagnostic then
+        max worst (code_class diagnostic.Diagnostic.code)
+      else worst)
     0 diagnostics
 
 (* ── source map for rendering ──
@@ -89,8 +93,13 @@ let print_minted (minted : Mint.minted list) =
   if minted <> [] then flush stdout
 
 let print_build_summary (summary : Workspace.summary) =
-  Printf.printf "build: %d created, %d replaced, %d deleted, %d unchanged\n"
+  Printf.printf "build: %d created, %d replaced, %d deleted, %d unchanged"
     summary.created summary.replaced summary.deleted summary.unchanged;
+  (* Only when a build is selective. A forest that publishes everything has
+     nothing to say here, and saying "0 unpublished" would imply it might. *)
+  if summary.unpublished > 0 then
+    Printf.printf ", %d unpublished" summary.unpublished;
+  print_newline ();
   flush stdout
 
 (* ── top-level exception filter ──
@@ -145,7 +154,8 @@ let run_build config_path =
   guard (fun () ->
     let result = Workspace.build ~config_path in
     emit_diagnostics result.Workspace.diagnostics;
-    if result.Workspace.diagnostics = [] then begin
+    (* A build that only warned still ran, so it still reports what it did. *)
+    if not (Diagnostic.has_error result.Workspace.diagnostics) then begin
       print_minted result.Workspace.minted;
       print_build_summary result.Workspace.summary
     end;

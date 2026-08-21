@@ -46,6 +46,32 @@ let empty_link_def () =
   Cmarkit.Link_definition.make ()
 
 (* Resolve a reference link against doc defs *)
+(* A footnote reference is an ordinary reference link whose definition happens
+   to be a footnote. Its number is not known until the whole document has been
+   walked, so lowering records the label and leaves the number at zero. *)
+let footnote_label defs link =
+  match Cmarkit.Inline.Link.reference_definition defs link with
+  | Some (Cmarkit.Block.Footnote.Def (footnote, _meta)) ->
+    Some (Cmarkit.Label.key (Cmarkit.Block.Footnote.label footnote))
+  | _ -> None
+
+(* Obsidian embeds an attachment the same way it embeds a note: `![[x.png]]`.
+   Which one is meant is settled by the extension, because an image is not a
+   tree and has no address to transclude. Obsidian's size syntax,
+   `![[x.png|300]]`, gives the width. *)
+let image_extensions =
+  [ ".png"; ".jpg"; ".jpeg"; ".gif"; ".svg"; ".webp"; ".bmp"; ".avif"; ".ico" ]
+
+let is_image_target target =
+  let lowered = String.lowercase_ascii target in
+  List.exists
+    (fun ext ->
+      let n = String.length lowered and e = String.length ext in
+      n > e && String.sub lowered (n - e) e = ext)
+    image_extensions
+
+let all_digits s = s <> "" && String.for_all (fun c -> c >= '0' && c <= '9') s
+
 let resolve_link_ref defs link =
   match Cmarkit.Inline.Link.reference_definition defs link with
   | Some (Cmarkit.Link_definition.Def def_node) ->
@@ -122,20 +148,45 @@ let rec lower_inlines source_path base_byte defs inline acc_inlines acc_diags =
             | Wiki.Link ->
               let node = Ir.Wiki_link { target; alias } in
               (({ node; span = ws } : Ir.inline) :: acc_inlines, acc_diags @ diags)
+            | Wiki.Embed when is_image_target target ->
+              (* The alt text is the file name, which is what Obsidian shows
+                 when the attachment is missing. A numeric alias is a width. *)
+              let alt = [ { Ir.node = Ir.Text target; span = ws } ] in
+              let width =
+                match alias with
+                | Some value when all_digits value -> Some value
+                | _ -> None
+              in
+              let alt =
+                match alias with
+                | Some text when not (all_digits text) ->
+                  [ { Ir.node = Ir.Text text; span = ws } ]
+                | _ -> alt
+              in
+              let node =
+                Ir.Image { alt; destination = Safe_uri.percent_encode target;
+                           asset_path = target; width; title = None }
+              in
+              (({ node; span = ws } : Ir.inline) :: acc_inlines, acc_diags @ diags)
             | Wiki.Embed ->
               let node = Ir.Wiki_embed target in
               (({ node; span = ws } : Ir.inline) :: acc_inlines, acc_diags @ diags)
             end
           | Error wiki_diags ->
             (acc_inlines, acc_diags @ diags @ wiki_diags))
-       | None ->
-         (match resolve_link_ref defs link with
+       | None -> (
+         match footnote_label defs link with
+         | Some label ->
+           let node = Ir.Footnote_ref { label; number = 0 } in
+           (({ node; span } : Ir.inline) :: acc_inlines, acc_diags @ diags)
+         | None ->
+         match resolve_link_ref defs link with
           | Some def ->
             let dest = link_dest def in
             let title = link_title def in
             (match Safe_uri.validate Safe_uri.Link span dest with
              | Ok validated_dest ->
-               let node = Ir.Link { label = List.rev children; destination = validated_dest; title } in
+               let node = Ir.Link { label = List.rev children; destination = validated_dest.Safe_uri.written; title } in
                (({ node; span } : Ir.inline) :: acc_inlines, acc_diags @ diags)
              | Error d ->
                (acc_inlines, d :: acc_diags @ diags))
@@ -151,7 +202,7 @@ let rec lower_inlines source_path base_byte defs inline acc_inlines acc_diags =
          let title = link_title def in
          (match Safe_uri.validate Safe_uri.Link span dest with
           | Ok validated_dest ->
-            let node = Ir.Link { label = List.rev children; destination = validated_dest; title } in
+            let node = Ir.Link { label = List.rev children; destination = validated_dest.Safe_uri.written; title } in
             (({ node; span } : Ir.inline) :: acc_inlines, acc_diags @ diags)
           | Error d ->
             (acc_inlines, d :: acc_diags @ diags))
@@ -164,7 +215,7 @@ let rec lower_inlines source_path base_byte defs inline acc_inlines acc_diags =
       let title = link_title def in
       (match Safe_uri.validate Safe_uri.Link span dest with
        | Ok validated_dest ->
-         let node = Ir.Link { label = List.rev children; destination = validated_dest; title } in
+         let node = Ir.Link { label = List.rev children; destination = validated_dest.Safe_uri.written; title } in
          (({ node; span } : Ir.inline) :: acc_inlines, acc_diags @ diags)
        | Error d ->
          (acc_inlines, d :: acc_diags @ diags))
@@ -186,7 +237,14 @@ let rec lower_inlines source_path base_byte defs inline acc_inlines acc_diags =
     let title = link_title def in
     (match Safe_uri.validate Safe_uri.Image span dest with
      | Ok validated_dest ->
-       let node = Ir.Image { alt = List.rev alt_children; destination = validated_dest; title } in
+       let node =
+         Ir.Image
+           { alt = List.rev alt_children;
+             destination = validated_dest.Safe_uri.encoded;
+             asset_path = validated_dest.Safe_uri.written;
+             width = None;
+             title }
+       in
        (({ node; span } : Ir.inline) :: acc_inlines, acc_diags @ diags)
      | Error d ->
        (acc_inlines, d :: acc_diags @ diags))
@@ -198,7 +256,7 @@ let rec lower_inlines source_path base_byte defs inline acc_inlines acc_diags =
     (match Safe_uri.validate Safe_uri.Link span dest with
      | Ok validated_dest ->
        let label_node = Ir.Text url in
-       let node = Ir.Link { label = [{ node = label_node; span }]; destination = validated_dest; title = None } in
+       let node = Ir.Link { label = [{ node = label_node; span }]; destination = validated_dest.Safe_uri.written; title = None } in
        (({ node; span } : Ir.inline) :: acc_inlines, acc_diags)
      | Error d ->
        (acc_inlines, d :: acc_diags))
@@ -245,11 +303,13 @@ let rec lower_inlines source_path base_byte defs inline acc_inlines acc_diags =
       (acc_inlines, diag :: acc_diags)
     end
 
-  | Cmarkit.Inline.Ext_strikethrough (_st, meta) ->
+  | Cmarkit.Inline.Ext_strikethrough (st, meta) ->
     let span = meta_span source_path base_byte meta in
-    let diag = Diagnostic.make TM102 (Span.Source_span span)
-      "strikethrough is not supported" in
-    (acc_inlines, diag :: acc_diags)
+    let inner = Cmarkit.Inline.Strikethrough.inline st in
+    let children, diags =
+      lower_inlines source_path base_byte defs inner [] [] in
+    let node = Ir.Strikethrough (List.rev children) in
+    (({ node; span } : Ir.inline) :: acc_inlines, acc_diags @ diags)
 
   (* Any unrecognized extension inline: reject with TM102.
      When a span is available from the inline's metadata, use it;
@@ -268,9 +328,13 @@ let rec lower_inlines source_path base_byte defs inline acc_inlines acc_diags =
    nodes are split and only the bracket bytes that fall inside a wiki
    whole-span are stripped. *)
 let filter_wiki_wrappers inlines =
+  (* An image is here because `![[x.png]]` lowers to one, and the `!` and the
+     brackets Cmarkit left beside it have to go the same way they do for a
+     link or a note embed. An ordinary `![alt](url)` has no sibling text inside
+     its own span, so counting it changes nothing. *)
   let wiki_spans = List.filter_map (fun i ->
     match i.Ir.node with
-    | Ir.Wiki_link _ | Ir.Wiki_embed _ -> Some i.Ir.span
+    | Ir.Wiki_link _ | Ir.Wiki_embed _ | Ir.Image _ -> Some i.Ir.span
     | _ -> None
   ) inlines in
   let is_within_wiki span =
@@ -367,6 +431,205 @@ let rec extract_inlines source_path base_byte defs block acc_inlines acc_diags =
    [base_byte] is an offset added to all byte positions in the result,
    used when the text is a substring of the original source (e.g. YAML
    scalar values within front matter). *)
+(* ── Obsidian inline marks ──
+
+   `==highlight==` and `%%comment%%` are Obsidian's, not CommonMark's, so
+   cmarkit hands them over as ordinary text. They are recognised over the
+   inline *list* rather than inside a single text node, because anything
+   cmarkit does understand — a code span, math, a link — splits the run they
+   delimit. A delimiter inside a code span is therefore never seen, which is
+   the behaviour we want. *)
+
+let find_delimiter delimiter inlines (from_index, from_offset) =
+  let width = String.length delimiter in
+  let rec loop index = function
+    | [] -> None
+    | ({ Ir.node = Ir.Text s; _ } : Ir.inline) :: rest when index >= from_index ->
+      let start = if index = from_index then from_offset else 0 in
+      let rec scan j =
+        if j + width > String.length s then None
+        else if String.sub s j width = delimiter then Some (index, j)
+        else scan (j + 1)
+      in
+      (match scan start with Some found -> Some found | None -> loop (index + 1) rest)
+    | _ :: rest -> loop (index + 1) rest
+  in
+  loop 0 inlines
+
+let inlines_before inlines (stop_index, stop_offset) =
+  let rec loop index acc = function
+    | [] -> List.rev acc
+    | (item : Ir.inline) :: rest ->
+      if index < stop_index then loop (index + 1) (item :: acc) rest
+      else
+        (match item.Ir.node with
+         | Ir.Text s when stop_offset > 0 ->
+           List.rev ({ item with Ir.node = Ir.Text (String.sub s 0 stop_offset) } :: acc)
+         | _ -> List.rev acc)
+  in
+  loop 0 [] inlines
+
+let inlines_after inlines (start_index, start_offset) =
+  let rec loop index = function
+    | [] -> []
+    | (item : Ir.inline) :: rest ->
+      if index < start_index then loop (index + 1) rest
+      else
+        (match item.Ir.node with
+         | Ir.Text s ->
+           let tail = String.sub s start_offset (String.length s - start_offset) in
+           if tail = "" then rest
+           else { item with Ir.node = Ir.Text tail } :: rest
+         | _ -> item :: rest)
+  in
+  loop 0 inlines
+
+let inlines_between inlines (start_index, start_offset) (stop_index, stop_offset) =
+  let rec loop index acc = function
+    | [] -> List.rev acc
+    | (item : Ir.inline) :: rest ->
+      if index < start_index then loop (index + 1) acc rest
+      else if index > stop_index then List.rev acc
+      else
+        let acc =
+          match item.Ir.node with
+          | Ir.Text s ->
+            let from = if index = start_index then start_offset else 0 in
+            let upto = if index = stop_index then stop_offset else String.length s in
+            if upto > from then
+              { item with Ir.node = Ir.Text (String.sub s from (upto - from)) } :: acc
+            else acc
+          | _ -> item :: acc
+        in
+        loop (index + 1) acc rest
+  in
+  loop 0 [] inlines
+
+(* [build] turns the delimited run into what replaces it: [None] drops it,
+   which is what a comment is. An unclosed delimiter stays literal text. *)
+let rec delimited_pass ~delimiter ~build inlines =
+  match find_delimiter delimiter inlines (0, 0) with
+  | None -> inlines
+  | Some (open_index, open_offset) -> (
+    let after_open = (open_index, open_offset + String.length delimiter) in
+    match find_delimiter delimiter inlines after_open with
+    | None -> inlines
+    | Some (close_index, close_offset) ->
+      let inner = inlines_between inlines after_open (close_index, close_offset) in
+      if inner = [] then
+        (* `====` and `%%%%` delimit nothing; leaving them literal is closer to
+           what was meant than emitting an empty element. *)
+        inlines
+      else
+        let span =
+          match List.nth_opt inlines open_index with
+          | Some item -> item.Ir.span
+          | None -> (List.hd inlines).Ir.span
+        in
+        let rest =
+          inlines_after inlines
+            (close_index, close_offset + String.length delimiter)
+        in
+        inlines_before inlines (open_index, open_offset)
+        @ (match build inner span with None -> [] | Some node -> [ node ])
+        @ delimited_pass ~delimiter ~build rest)
+
+let obsidian_marks inlines =
+  let inlines =
+    delimited_pass ~delimiter:"%%"
+      ~build:(fun _inner _span -> None)
+      inlines
+  in
+  delimited_pass ~delimiter:"=="
+    ~build:(fun inner span -> Some { Ir.node = Ir.Highlight inner; span })
+    inlines
+
+(* Apply [f] to every inline list in the document, outermost first. *)
+let rec map_inlines f (inlines : Ir.inline list) =
+  List.map
+    (fun (item : Ir.inline) ->
+      match item.Ir.node with
+      | Ir.Emphasis inner -> { item with Ir.node = Ir.Emphasis (map_inlines f (f inner)) }
+      | Ir.Strong inner -> { item with Ir.node = Ir.Strong (map_inlines f (f inner)) }
+      | Ir.Strikethrough inner ->
+        { item with Ir.node = Ir.Strikethrough (map_inlines f (f inner)) }
+      | Ir.Highlight inner ->
+        { item with Ir.node = Ir.Highlight (map_inlines f (f inner)) }
+      | Ir.Link link ->
+        { item with
+          Ir.node = Ir.Link { link with Ir.label = map_inlines f (f link.Ir.label) } }
+      | Ir.Image image ->
+        { item with
+          Ir.node = Ir.Image { image with Ir.alt = map_inlines f (f image.Ir.alt) } }
+      | Ir.Text _ | Ir.Code _ | Ir.Wiki_link _ | Ir.Wiki_embed _ | Ir.Math _
+      | Ir.Footnote_ref _ | Ir.Hard_break | Ir.Soft_break -> item)
+    inlines
+
+let inlines_are_blank inlines =
+  List.for_all
+    (fun (item : Ir.inline) ->
+      match item.Ir.node with
+      | Ir.Text s -> String.trim s = ""
+      | Ir.Soft_break | Ir.Hard_break -> true
+      | _ -> false)
+    inlines
+
+let rec map_block_inlines f (block : Ir.block) =
+  let apply inlines = map_inlines f (f inlines) in
+  match block.Ir.bnode with
+  | Ir.Paragraph inlines ->
+    { block with Ir.bnode = Ir.Paragraph (apply inlines) }
+  | Ir.Heading { level; title } ->
+    { block with Ir.bnode = Ir.Heading { level; title = apply title } }
+  | Ir.Blockquote blocks ->
+    { block with Ir.bnode = Ir.Blockquote (map_blocks_inlines f blocks) }
+  | Ir.Callout { kind; folded; title; body } ->
+    { block with
+      Ir.bnode =
+        Ir.Callout
+          { kind; folded; title = apply title; body = map_blocks_inlines f body } }
+  | Ir.List { kind; tight; items } ->
+    { block with
+      Ir.bnode =
+        Ir.List
+          { kind; tight;
+            items =
+              List.map
+                (fun (item : Ir.list_item) ->
+                  { item with
+                    Ir.item_blocks = map_blocks_inlines f item.Ir.item_blocks })
+                items } }
+  | Ir.Table { alignment; header; rows } ->
+    { block with
+      Ir.bnode =
+        Ir.Table
+          { alignment;
+            header = Option.map (List.map apply) header;
+            rows = List.map (List.map apply) rows } }
+  | Ir.Footnote_def { label; body } ->
+    { block with
+      Ir.bnode = Ir.Footnote_def { label; body = map_blocks_inlines f body } }
+  | Ir.Footnotes entries ->
+    { block with
+      Ir.bnode =
+        Ir.Footnotes
+          (List.map (fun (n, body) -> (n, map_blocks_inlines f body)) entries) }
+  | Ir.Code_block _ | Ir.Thematic_break | Ir.Subtree_directive _
+  | Ir.Subtree_open _ | Ir.Subtree_close _ | Ir.Block_embed _
+  | Ir.Display_math _ -> block
+
+(* A paragraph that held nothing but a comment leaves no `\p{}` behind, the
+   same bargain a paragraph holding nothing but a block anchor already
+   strikes. *)
+and map_blocks_inlines f blocks =
+  List.filter_map
+    (fun block ->
+      let block = map_block_inlines f block in
+      match block.Ir.bnode with
+      | Ir.Paragraph inlines when inlines_are_blank inlines -> None
+      | _ -> Some block)
+    blocks
+
 let parse_inlines source text ~base_byte =
   let doc =
     Cmarkit.Doc.of_string ~locs:true ~strict:false
@@ -377,12 +640,11 @@ let parse_inlines source text ~base_byte =
   let path = Source.path source in
   let inlines, diags = extract_inlines path base_byte defs block [] [] in
   let filtered = filter_wiki_wrappers inlines in
-  let sorted_inlines = List.rev filtered in
+  let sorted_inlines =
+    map_inlines obsidian_marks (obsidian_marks (List.rev filtered))
+  in
   let sorted_diags = List.rev diags in
-  if sorted_diags = [] then
-    Ok sorted_inlines
-  else
-    Error sorted_diags
+  Diagnostic.gate sorted_inlines sorted_diags
 
 (* ── Block lowering ── *)
 
@@ -650,6 +912,169 @@ let lower_block_inlines source_path base_byte defs inline acc_diags =
 
 (* Recursively lower a Cmarkit block tree into Ir.block list.
    [depth] tracks container nesting: 0 = document, >0 = inside blockquote/list. *)
+(* ── Obsidian callouts ──
+
+   `> [!note] Title` is a block quote whose first line names a kind. Nothing in
+   CommonMark makes that a construct, so it arrives as ordinary text and is
+   recognised here rather than being emitted as a literal `[!note]`, which is
+   what a reader would otherwise see on the page. *)
+
+let is_callout_kind_char c =
+  (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+  || c = '-' || c = '_'
+
+(* `[!kind]`, then an optional fold marker, then the rest of the line. *)
+let parse_callout_marker text =
+  let len = String.length text in
+  if len < 4 || text.[0] <> '[' || text.[1] <> '!' then None
+  else
+    let rec kind_end i =
+      if i < len && is_callout_kind_char text.[i] then kind_end (i + 1) else i
+    in
+    let stop = kind_end 2 in
+    if stop = 2 || stop >= len || text.[stop] <> ']' then None
+    else
+      let kind = String.sub text 2 (stop - 2) in
+      let after = stop + 1 in
+      let folded, after =
+        if after < len && (text.[after] = '+' || text.[after] = '-') then
+          (text.[after] = '+', after + 1)
+        else (false, after)
+      in
+      let rec skip_blanks i =
+        if i < len && (text.[i] = ' ' || text.[i] = '\t') then skip_blanks (i + 1)
+        else i
+      in
+      let title_start = skip_blanks after in
+      Some (kind, folded, String.sub text title_start (len - title_start))
+
+let capitalize_kind kind =
+  if kind = "" then kind
+  else String.make 1 (Char.uppercase_ascii kind.[0])
+       ^ String.lowercase_ascii (String.sub kind 1 (String.length kind - 1))
+
+let rec merge_leading_text acc = function
+  | ({ Ir.node = Ir.Text s; _ } : Ir.inline) :: rest -> merge_leading_text (acc ^ s) rest
+  | rest -> (acc, rest)
+
+let rec split_at_break before = function
+  | ({ Ir.node = (Ir.Soft_break | Ir.Hard_break); _ } : Ir.inline) :: rest ->
+    (List.rev before, rest)
+  | item :: rest -> split_at_break (item :: before) rest
+  | [] -> (List.rev before, [])
+
+let callout_of_blockquote (blocks : Ir.block list) =
+  match blocks with
+  | ({ Ir.bnode = Ir.Paragraph inlines; bspan = pspan } :: rest_blocks) -> (
+    let head, tail = merge_leading_text "" inlines in
+    match parse_callout_marker head with
+    | None -> None
+    | Some (kind, folded, title_head) ->
+      let title_tail, body_head = split_at_break [] tail in
+      let title_text =
+        if title_head = "" then [] else [ { Ir.node = Ir.Text title_head; span = pspan } ]
+      in
+      let title =
+        match title_text @ title_tail with
+        | [] -> [ { Ir.node = Ir.Text (capitalize_kind kind); span = pspan } ]
+        | titled -> titled
+      in
+      let body =
+        match body_head with
+        | [] -> rest_blocks
+        | inlines -> { Ir.bnode = Ir.Paragraph inlines; bspan = pspan } :: rest_blocks
+      in
+      Some (Ir.Callout { kind; folded; title; body }))
+  | _ -> None
+
+
+
+(* ── Footnotes ──
+
+   Footnotes are numbered by the order they are first referred to, not the
+   order they are defined, and their definitions are gathered into one section
+   at the end however they were scattered through the note. A definition
+   nothing refers to renders nothing, so it is dropped. *)
+
+let footnote_reference_order blocks =
+  let order = ref [] in
+  let visit inlines =
+    List.iter
+      (fun (item : Ir.inline) ->
+        match item.Ir.node with
+        | Ir.Footnote_ref { label; _ } ->
+          if not (List.mem label !order) then order := label :: !order
+        | _ -> ())
+      inlines;
+    inlines
+  in
+  ignore (map_blocks_inlines visit blocks);
+  List.rev !order
+
+let number_footnote_refs numbers blocks =
+  let visit inlines =
+    List.map
+      (fun (item : Ir.inline) ->
+        match item.Ir.node with
+        | Ir.Footnote_ref { label; _ } -> (
+          match List.assoc_opt label numbers with
+          | Some number -> { item with Ir.node = Ir.Footnote_ref { label; number } }
+          | None -> item)
+        | _ -> item)
+      inlines
+  in
+  map_blocks_inlines visit blocks
+
+let rec extract_footnote_definitions blocks =
+  List.fold_left
+    (fun (kept, defs) (block : Ir.block) ->
+      match block.Ir.bnode with
+      | Ir.Footnote_def { label; body } ->
+        let body, nested = extract_footnote_definitions body in
+        (kept, defs @ nested @ [ (label, body) ])
+      | Ir.Blockquote inner ->
+        let inner, nested = extract_footnote_definitions inner in
+        (kept @ [ { block with Ir.bnode = Ir.Blockquote inner } ], defs @ nested)
+      | Ir.Callout { kind; folded; title; body } ->
+        let body, nested = extract_footnote_definitions body in
+        (kept @ [ { block with Ir.bnode = Ir.Callout { kind; folded; title; body } } ],
+         defs @ nested)
+      | Ir.List { kind; tight; items } ->
+        let items, nested =
+          List.fold_left
+            (fun (items, nested) (item : Ir.list_item) ->
+              let item_blocks, more = extract_footnote_definitions item.Ir.item_blocks in
+              (items @ [ { item with Ir.item_blocks } ], nested @ more))
+            ([], []) items
+        in
+        (kept @ [ { block with Ir.bnode = Ir.List { kind; tight; items } } ],
+         defs @ nested)
+      | _ -> (kept @ [ block ], defs))
+    ([], []) blocks
+
+let gather_footnotes blocks =
+  let order = footnote_reference_order blocks in
+  let blocks, definitions = extract_footnote_definitions blocks in
+  match order with
+  | [] -> blocks
+  | _ ->
+    let numbers = List.mapi (fun index label -> (label, index + 1)) order in
+    let entries =
+      List.filter_map
+        (fun (label, number) ->
+          Option.map (fun body -> (number, body)) (List.assoc_opt label definitions))
+        numbers
+    in
+    let blocks = number_footnote_refs numbers blocks in
+    if entries = [] then blocks
+    else
+      let span =
+        match List.rev blocks with
+        | last :: _ -> last.Ir.bspan
+        | [] -> { Span.path = ""; start_byte = 0; end_byte = 0 }
+      in
+      blocks @ [ { Ir.bnode = Ir.Footnotes entries; bspan = span } ]
+
 let rec lower_blocks source_path depth defs block acc_blocks acc_diags =
   match block with
   | Cmarkit.Block.Blocks (blocks, _meta) ->
@@ -719,7 +1144,12 @@ let rec lower_blocks source_path depth defs block acc_blocks acc_diags =
     let span = meta_span source_path 0 bq_meta in
     let inner = Cmarkit.Block.Block_quote.block bq in
     let inner_blocks, diags = lower_blocks source_path (depth + 1) defs inner [] acc_diags in
-    let node = Ir.Blockquote (List.rev inner_blocks) in
+    let inner_blocks = List.rev inner_blocks in
+    let node =
+      match callout_of_blockquote inner_blocks with
+      | Some callout -> callout
+      | None -> Ir.Blockquote inner_blocks
+    in
     ({ Ir.bnode = node; bspan = span } :: acc_blocks, diags)
 
   | Cmarkit.Block.List (l, l_meta) ->
@@ -731,27 +1161,31 @@ let rec lower_blocks source_path depth defs block acc_blocks acc_diags =
     in
     let tight = Cmarkit.Block.List'.tight l in
     let items = Cmarkit.Block.List'.items l in
-    let has_task, item_blocks_rev, diags =
-      List.fold_left (fun (task_found, items_acc, diags_acc) (item, item_meta) ->
+    let item_blocks_rev, diags =
+      List.fold_left (fun (items_acc, diags_acc) (item, item_meta) ->
         let item_span = meta_span source_path 0 item_meta in
-        let task_found' =
+        (* A task marker becomes a checkbox. Cmarkit reports the marker rune;
+           anything other than a blank is a completed item of some kind, and
+           HTML has one checked state for all of them. *)
+        let item_task =
           match Cmarkit.Block.List_item.ext_task_marker item with
-          | Some _ -> true
-          | None -> task_found
+          | None -> None
+          | Some (rune, _) -> (
+            match Cmarkit.Block.List_item.task_status_of_task_marker rune with
+            | `Unchecked -> Some Ir.Task_unchecked
+            | `Checked | `Cancelled | `Other _ -> Some Ir.Task_checked)
         in
         let inner = Cmarkit.Block.List_item.block item in
         let child_blocks, child_diags =
           lower_blocks source_path (depth + 1) defs inner [] diags_acc in
-        let item_rec = { Ir.item_blocks = List.rev child_blocks; item_span } in
-        (task_found', item_rec :: items_acc, child_diags)
-      ) (false, [], acc_diags) items
+        let item_rec =
+          { Ir.item_blocks = List.rev child_blocks; item_task; item_span }
+        in
+        (item_rec :: items_acc, child_diags)
+      ) ([], acc_diags) items
     in
     let items_rev = List.rev item_blocks_rev in
-    let diags' =
-      if has_task then
-        Diagnostic.make TM102 (Span.Source_span span) "task list items are not supported" :: diags
-      else diags
-    in
+    let diags' = diags in
     (* At depth > 0, reject embed/display math inside list items *)
     let diags'' =
       if depth > 0 then
@@ -843,23 +1277,81 @@ let rec lower_blocks source_path depth defs block acc_blocks acc_diags =
       "fenced math blocks are not supported; use $$...$$ for display math" in
     (acc_blocks, diag :: acc_diags)
 
-  | Cmarkit.Block.Ext_table (_t, t_meta) ->
+  | Cmarkit.Block.Ext_table (t, t_meta) ->
     let span = meta_span source_path 0 t_meta in
-    let diag = Diagnostic.make TM102 (Span.Source_span span)
-      "tables are not supported" in
-    (acc_blocks, diag :: acc_diags)
+    let columns = Cmarkit.Block.Table.col_count t in
+    let alignment =
+      (* The separator row carries the alignment; a table without one has
+         none, and every column defaults to none. *)
+      let from_sep =
+        List.find_map
+          (fun ((row, _meta), _blanks) ->
+            match row with
+            | `Sep seps ->
+              Some
+                (List.map
+                   (fun ((align, _count), _meta) ->
+                     match align with
+                     | Some `Left -> Ir.Align_left
+                     | Some `Center -> Ir.Align_center
+                     | Some `Right -> Ir.Align_right
+                     | None -> Ir.Align_none)
+                   seps)
+            | `Header _ | `Data _ -> None)
+          (Cmarkit.Block.Table.rows t)
+      in
+      let found = Option.value ~default:[] from_sep in
+      List.init columns (fun i ->
+        Option.value ~default:Ir.Align_none (List.nth_opt found i))
+    in
+    (* Rows are padded to the column count here so that emission never has to
+       reason about ragged input. *)
+    let lower_cells cells diags =
+      let lowered, diags =
+        List.fold_left
+          (fun (acc, diags) (inline, _layout) ->
+            let children, more =
+              lower_inlines source_path 0 defs inline [] [] in
+            (List.rev children :: acc, diags @ more))
+          ([], diags) cells
+      in
+      let lowered = List.rev lowered in
+      let padding = List.init (max 0 (columns - List.length lowered)) (fun _ -> []) in
+      (lowered @ padding, diags)
+    in
+    let header, data, diags =
+      List.fold_left
+        (fun (header, data, diags) ((row, _meta), _blanks) ->
+          match row with
+          | `Sep _ -> (header, data, diags)
+          | `Header cells ->
+            let cells, diags = lower_cells cells diags in
+            ((match header with Some _ -> header | None -> Some cells), data, diags)
+          | `Data cells ->
+            let cells, diags = lower_cells cells diags in
+            (header, cells :: data, diags))
+        (None, [], acc_diags) (Cmarkit.Block.Table.rows t)
+    in
+    let node = Ir.Table { alignment; header; rows = List.rev data } in
+    (({ Ir.bnode = node; bspan = span } : Ir.block) :: acc_blocks, diags)
 
-  | Cmarkit.Block.Ext_footnote_definition (_fn, fn_meta) ->
+  | Cmarkit.Block.Ext_footnote_definition (fn, fn_meta) ->
     let span = meta_span source_path 0 fn_meta in
-    let diag = Diagnostic.make TM102 (Span.Source_span span)
-      "footnotes are not supported" in
-    (acc_blocks, diag :: acc_diags)
+    let footnote = fn in
+    let label = Cmarkit.Label.key (Cmarkit.Block.Footnote.label footnote) in
+    let inner = Cmarkit.Block.Footnote.block footnote in
+    let body, diags =
+      lower_blocks source_path (depth + 1) defs inner [] acc_diags
+    in
+    let node = Ir.Footnote_def { label; body = List.rev body } in
+    (({ Ir.bnode = node; bspan = span } : Ir.block) :: acc_blocks, diags)
 
   (* Fallback: any unrecognized block extension *)
   | _ ->
     let diag = Diagnostic.make TM102 Span.No_location
       "unsupported Markdown block extension" in
     (acc_blocks, diag :: acc_diags)
+
 
 (* CommonMark stops at six levels: a run of seven or more "#" is not a heading
    at all but an ordinary paragraph, so a heading nested one level too deep
@@ -894,7 +1386,9 @@ let parse source ~masked_markdown raw_metadata =
   let defs = Cmarkit.Doc.defs doc in
   let path = Source.path source in
   let blocks_rev, block_diags = lower_blocks path 0 defs block [] [] in
-  let blocks = List.rev blocks_rev in
+  let blocks =
+    gather_footnotes (map_blocks_inlines obsidian_marks (List.rev blocks_rev))
+  in
   let block_diags =
     List.filter_map (atx_overflow masked_markdown) blocks @ block_diags
   in
@@ -910,11 +1404,9 @@ let parse source ~masked_markdown raw_metadata =
       ~base_byte:located.Metadata.span.Span.start_byte
   in
   match Metadata.lower_inline_values ~parse:parse_meta raw_metadata with
-  | Ok lowered_meta ->
-    let all_diags = block_diags in
-    if all_diags = [] then
-      Ok { Ir.metadata = lowered_meta; blocks; doc_span }
-    else
-      Error (List.rev all_diags)
+  | Ok (lowered_meta, meta_warnings) ->
+    Diagnostic.gate
+      { Ir.metadata = lowered_meta; blocks; doc_span }
+      (List.rev block_diags @ meta_warnings)
   | Error meta_diags ->
     Error (List.rev (block_diags @ meta_diags))

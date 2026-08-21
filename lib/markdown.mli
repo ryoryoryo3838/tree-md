@@ -8,7 +8,7 @@
    pass [base_byte = 0]. *)
 val parse_inlines :
   Source.t -> string -> base_byte:int ->
-  (Ir.inline list, Diagnostic.t list) result
+  (Ir.inline list * Diagnostic.t list, Diagnostic.t list) result
 
 (* parse: lower a complete Markdown document.
    [source] is the original source file.
@@ -17,4 +17,4 @@ val parse_inlines :
    Returns a complete [Ir.document] or diagnostics. *)
 val parse :
   Source.t -> masked_markdown:string -> Metadata.raw ->
-  (Ir.document, Diagnostic.t list) result
+  (Ir.document * Diagnostic.t list, Diagnostic.t list) result

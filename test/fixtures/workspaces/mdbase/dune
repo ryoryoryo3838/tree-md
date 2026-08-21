@@ -1,0 +1,4 @@
+; Dune ignores a directory whose name begins with an underscore, and mdbase
+; puts a collection's type files in `_types/`. Without this the fixture would
+; be staged without the very files it is a fixture for.
+(dirs :standard _types)

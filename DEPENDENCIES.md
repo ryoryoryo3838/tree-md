@@ -28,6 +28,10 @@ artifacts), not assumed from package metadata.
 > under the explicit `OCaml-LGPL-linking-exception` (the standard OCaml
 > ecosystem exception that permits any program to link the library without
 > copyleft obligations), or (b) a build tool that is never linked or shipped.
+> Two packages carrying an LGPL expression are linked — `menhirLib` and `re` —
+> and both carry the explicit `OCaml-LGPL-linking-exception`, which is the same
+> exception the OCaml compiler's own runtime carries and imposes no copyleft
+> obligation on a program that links them.
 > The only GPL-licensed package in the closure, `menhir`, is strictly a
 > build-time parser generator for `otoml`; its license does not propagate to
 > the parser it generates or to any compiled artifact. No third-party source is
@@ -47,17 +51,19 @@ definition in the opam repository, not inferred.
 
 ## Direct dependencies (from `dune-project`)
 
-These are the only packages the compiler declares. All seven are permissively
-licensed and match the intended direct dependency set in the design spec.
+These are the only packages the compiler declares. Seven are permissively
+licensed; `re` carries an LGPL expression with the OCaml linking exception,
+which is the same footing the compiler's own runtime stands on.
 
 | Package | Resolved version | License | Purpose |
 | --- | --- | --- | --- |
 | cmarkit | 0.4.0 | ISC | CommonMark parsing, locations, custom resolver, math |
 | yaml | 3.2.0 | ISC | Located YAML event stream for front matter |
 | otoml | 1.0.5 | MIT | TOML configuration parsing |
-| cmdliner | 2.1.0 | ISC | Command-line interface |
+| cmdliner | 2.1.1 | ISC | Command-line interface |
 | yojson | 3.0.0 | BSD-3-Clause | Generated-file manifest JSON |
-| digestif | 1.3.0 | MIT | SHA-256 manifest hashes |
+| digestif | 1.3.1 | MIT | SHA-256 manifest hashes |
+| re | 1.14.0 | LGPL-2.1-or-later WITH OCaml-LGPL-linking-exception | `pattern` in the JSON Schema profile, and `matches` in mdbase's structured match predicates |
 | alcotest | 1.9.1 | ISC | Unit and integration test framework (test only) |
 
 ## Runtime-linked closure
@@ -69,20 +75,27 @@ library stanza (`cmarkit yaml unix otoml digestif yojson cmdliner`) and
 | Package | Resolved version | License | Source | Why it is linked |
 | --- | --- | --- | --- | --- |
 | cmarkit | 0.4.0 | ISC | https://erratique.ch/software/cmarkit/releases/cmarkit-0.4.0.tbz | CommonMark parser |
-| cmdliner | 2.1.0 | ISC | https://erratique.ch/software/cmdliner/releases/cmdliner-2.1.0.tbz | CLI parser |
+| cmdliner | 2.1.1 | ISC | https://erratique.ch/software/cmdliner/releases/cmdliner-2.1.1.tbz | CLI parser |
 | yaml | 3.2.0 | ISC | https://github.com/avsm/ocaml-yaml/releases/download/v3.2.0/yaml-3.2.0.tbz | YAML front matter |
 | ctypes | 0.24.0 | MIT | https://github.com/yallop/ocaml-ctypes/archive/refs/tags/0.24.0.tar.gz | yaml's C bindings |
-| integers | 0.7.0 | MIT | https://github.com/yallop/ocaml-integers/archive/0.7.0.tar.gz | ctypes integer support |
+| integers | 0.8.0 | MIT | https://github.com/yallop/ocaml-integers/archive/0.8.0.tar.gz | ctypes integer support |
 | otoml | 1.0.5 | MIT | https://github.com/dmbaturin/otoml/archive/refs/tags/1.0.5.tar.gz | TOML configuration |
 | menhirLib | 20250912 | LGPL-2.0-only WITH OCaml-LGPL-linking-exception | https://gitlab.inria.fr/fpottier/menhir/-/archive/20250912/archive.tar.gz | runtime library for otoml's generated TOML parser |
 | uutf | 1.0.4 | ISC | https://erratique.ch/software/uutf/releases/uutf-1.0.4.tbz | UTF-8 codec (otoml) |
 | yojson | 3.0.0 | BSD-3-Clause | https://github.com/ocaml-community/yojson/releases/download/3.0.0/yojson-3.0.0.tbz | manifest JSON |
-| digestif | 1.3.0 | MIT | https://github.com/mirage/digestif/releases/download/v1.3.0/digestif-1.3.0.tbz | SHA-256 |
+| digestif | 1.3.1 | MIT | https://github.com/mirage/digestif/releases/download/v1.3.1/digestif-1.3.1.tbz | SHA-256 |
 | eqaf | 0.10 | MIT | https://github.com/mirage/eqaf/releases/download/v0.10/eqaf-0.10.tbz | constant-time compare for digestif |
+| re | 1.14.0 | LGPL-2.1-or-later WITH OCaml-LGPL-linking-exception | https://github.com/ocaml/ocaml-re/archive/refs/tags/1.14.0.tar.gz | regular expressions for JSON Schema `pattern` and mdbase `matches` |
 
-The only LGPL-expression package linked into the binary is `menhirLib`, which
-carries the explicit `OCaml-LGPL-linking-exception` (identical in effect to the
-OCaml compiler's own license). Linking it imposes no copyleft obligation.
+Two LGPL-expression packages are linked into the binary, `menhirLib` and `re`.
+Both carry the explicit `OCaml-LGPL-linking-exception`, identical in effect to
+the OCaml compiler's own license, so linking them imposes no copyleft
+obligation.
+
+`re` was test-only before mdbase v0.3 conformance: its JSON Schema profile
+requires `pattern`, and its structured match predicates require `matches`, and
+neither can be met without a regular-expression engine. It is already in the
+locked closure through `alcotest`, so promoting it added no new package.
 
 ## OCaml compiler and standard library
 
@@ -95,7 +108,7 @@ standard `OCaml-LGPL-linking-exception`.
 | ocaml-base-compiler | 5.3.0 | LGPL-2.1-or-later WITH OCaml-LGPL-linking-exception | compiler implementation |
 | ocaml-compiler | 5.3.0 | LGPL-2.1-or-later WITH OCaml-LGPL-linking-exception | https://github.com/ocaml/ocaml/releases/download/5.3.0/ocaml-5.3.0.tar.gz |
 | ocaml-config | 3 | ISC | switch configuration |
-| base-bytes / base-threads / base-unix / seq | base | — | virtual stdlib packages |
+| base-threads / base-unix | base | — | virtual stdlib packages (the two the lock resolves) |
 
 ## Test-only closure
 
@@ -107,15 +120,16 @@ Linked only into the Alcotest/cram test executables; never shipped.
 | astring | 0.8.5 | ISC | https://erratique.ch/software/astring/releases/astring-0.8.5.tbz | alcotest, bos |
 | fmt | 0.11.0 | ISC | https://erratique.ch/software/fmt/releases/fmt-0.11.0.tbz | alcotest, bos |
 | logs | 0.10.0 | ISC | https://erratique.ch/software/logs/releases/logs-0.10.0.tbz | alcotest, bos |
-| re | 1.14.0 | LGPL-2.1-or-later WITH OCaml-LGPL-linking-exception | https://github.com/ocaml/ocaml-re/archive/refs/tags/1.14.0.tar.gz | alcotest |
 | stdlib-shims | 0.3.0 | LGPL-2.1-only WITH OCaml-LGPL-linking-exception | https://github.com/ocaml/stdlib-shims/releases/download/0.3.0/stdlib-shims-0.3.0.tbz | alcotest |
 | ocaml-syntax-shims | 1.0.0 | MIT | https://github.com/ocaml-ppx/ocaml-syntax-shims/releases/download/1.0.0/ocaml-syntax-shims-1.0.0.tbz | alcotest |
-| bos | 0.2.1 | ISC | https://erratique.ch/software/bos/releases/bos-0.2.1.tbz | yaml (test) |
+| bos | 0.3.0 | ISC | https://erratique.ch/software/bos/releases/bos-0.3.0.tbz | yaml (test) |
 | fpath | 0.7.3 | ISC | https://erratique.ch/software/fpath/releases/fpath-0.7.3.tbz | bos |
 | rresult | 0.7.0 | ISC | https://erratique.ch/software/rresult/releases/rresult-0.7.0.tbz | bos |
 
-All LGPL-expression packages here are test-only and carry the OCaml linking
-exception; they are never linked into the shipped binary.
+Every LGPL-expression package listed here carries the OCaml linking exception.
+`stdlib-shims` is test-only and never reaches the shipped binary; `re` is no
+longer in this section, having become a runtime dependency, and is listed with
+the runtime closure above.
 
 ## Build tools (licenses do not propagate)
 
@@ -126,16 +140,16 @@ their licenses are still recorded in the audit."
 
 | Package | Resolved version | License | Source | Role |
 | --- | --- | --- | --- | --- |
-| dune | 3.22.2 | MIT | https://github.com/ocaml/dune/releases/download/3.22.2/dune-3.22.2.tbz | build orchestrator |
-| dune-configurator | 3.22.2 | MIT | https://github.com/ocaml/dune/releases/download/3.22.2/dune-3.22.2.tbz | yaml system-config discovery |
+| dune | >= 3.22 | MIT | https://github.com/ocaml/dune | build orchestrator; the driver itself, so it is not a package in `dune.lock/` — the required range is `dune-project`'s |
+| dune-configurator | 3.23.1 | MIT | https://github.com/ocaml/dune/releases/download/3.23.1/dune-3.23.1.tbz | yaml system-config discovery |
 | csexp | 1.5.2 | MIT | https://github.com/ocaml-dune/csexp/releases/download/1.5.2/csexp-1.5.2.tbz | dune-configurator |
-| ocamlfind | 1.9.8 | MIT | https://github.com/ocaml/ocamlfind/archive/refs/tags/findlib-1.9.8.tar.gz | package manager (cmarkit) |
-| ocamlbuild | 0.16.1 | LGPL-2.0-or-later WITH OCaml-LGPL-linking-exception | https://github.com/ocaml/ocamlbuild/archive/refs/tags/0.16.1.tar.gz | legacy build system (cmarkit) |
+| ocamlfind | 1.9.8+dune | MIT | https://github.com/ocaml/ocamlfind/archive/refs/tags/findlib-1.9.8.tar.gz | package manager (cmarkit) |
+| ocamlbuild | 0.16.1+dune | LGPL-2.0-or-later WITH OCaml-LGPL-linking-exception | https://github.com/gridbugs/ocamlbuild/archive/refs/tags/0.16.1+dune.tar.gz | legacy build system (cmarkit) |
 | topkg | 1.1.1 | ISC | https://erratique.ch/software/topkg/releases/topkg-1.1.1.tbz | release packager (cmarkit) |
 | menhir | 20250912 | **GPL-2.0-only** | https://gitlab.inria.fr/fpottier/menhir/-/archive/20250912/archive.tar.gz | parser generator for otoml |
 | menhirCST | 20250912 | LGPL-2.0-only WITH OCaml-LGPL-linking-exception | https://gitlab.inria.fr/fpottier/menhir/-/archive/20250912/archive.tar.gz | menhir component |
 | menhirSdk | 20250912 | LGPL-2.0-only WITH OCaml-LGPL-linking-exception | https://gitlab.inria.fr/fpottier/menhir/-/archive/20250912/archive.tar.gz | menhir component |
-| conf-pkg-config | 4 | **GPL-1.0-or-later** | — (conf package) | build-time system check (pkg-config presence) |
+| conf-pkg-config | 4 | **GPL-1.0-or-later** | — (conf package) | build-time system check (pkg-config presence). Not in `dune.lock/`, which resolves `yaml` to `dune-configurator` alone; it appears only when the closure is resolved through opam |
 
 `menhir` is the only GPL-2.0 package. It is a parser generator invoked while
 building `otoml`: it consumes otoml's grammar and produces OCaml source that is
@@ -146,11 +160,12 @@ tool exists; it compiles nothing and links nothing.
 
 ## Installed but not linked into compiler outputs
 
-The `opam list --installed --required-by tree-md --recursive` query also reports
-packages that are installed in the shared development switch but are not part of
-the compiler's link closure (they are dependencies of other switch projects, or
-of uutf's own development suite). None of them carries a non-exception
-copyleft license.
+None of the packages below is in `dune.lock/`. They come from the
+`opam list --installed --required-by tree-md --recursive` query run in the
+shared development switch, where they are installed as dependencies of other
+projects in that switch or of uutf's own development suite. They are recorded
+because that query was the audit's original source and because none of them
+carries a non-exception copyleft license either way.
 
 | Package | Resolved version | License | Source |
 | --- | --- | --- | --- |
@@ -187,8 +202,8 @@ file was authoritative. Recover it from git history if an opam-native lock is
 ever wanted, and regenerate it with `opam lock tree-md.opam` rather than reusing
 the stale copy.
 
-Because `dune.lock/` is regenerated independently, a few resolved patch
-versions in the tables above may lag it (for example `dune pkg lock` currently
-resolves `cmdliner.2.1.1` and `digestif.1.3.1`). The license *classes* are
-unaffected, which is what this audit turns on; `ls dune.lock/*.pkg` always
-gives the exact current set.
+The resolved versions in the tables above are the ones `dune.lock/` currently
+pins, checked against `ls dune.lock/*.pkg`. Because the lock is regenerated
+independently of this file, run that command after `dune pkg lock` and reconcile
+the tables. The license *classes* are what the audit turns on, and a patch
+version does not move one.

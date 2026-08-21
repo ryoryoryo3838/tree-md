@@ -7,6 +7,9 @@ fixtures are available next to the cram directory.
   $ cp -rL ../fixtures/workspaces/clean clean
   $ cp -rL ../fixtures/workspaces/compile compile
   $ cp -rL ../fixtures/workspaces/compile-bad source-bad
+  $ cp -rL ../fixtures/workspaces/unicode unicode
+  $ cp -rL ../fixtures/workspaces/mdbase mdbase
+  $ cp -rL ../fixtures/workspaces/publish publish
 
 --version prints the package version and exits 0.
 
@@ -171,3 +174,94 @@ error and exits 2.
   TM401: error: unsupported.toml: unsupported target
     --> unsupported.toml
   [2]
+
+A file name is a search key, not an address. Notes called 日本語のノート and
+"My Note" build, get minted addresses, and are reachable by the names
+Obsidian autocompletes. A note with no H1 is titled by its file, because the
+address it was given is a number and a number is not a title.
+
+  $ tree-md build --config unicode/tree-md.toml
+  TM202: warning: "dup" names more than one file; resolved by mdbase link order (nearest folder, then shortest path). Give the tree an `id:` and reference that to say which one you mean
+    --> $TESTCASE_ROOT/unicode/trees-md/refer.tree.md:7:1
+     |
+     | [[dup]] を参照。
+     | ^^^^^^^
+  minted: $TESTCASE_ROOT/unicode/trees-md/My Note.tree.md -> 0000
+  minted: $TESTCASE_ROOT/unicode/trees-md/日本語のノート.tree.md -> 0001
+  build: 6 created, 0 replaced, 0 deleted, 0 unchanged
+
+  $ cat unicode/generated/index.tree
+  \title{索引}
+  \p{[[0001]] と [[0000]] へのリンク。}
+
+  $ cat unicode/generated/0000.tree
+  \title{My Note}
+  \p{本文だけで見出しがないノート。}
+
+A second build has nothing to do, and check agrees the state is clean. The
+ambiguity warning stands — it is a warning, so it never fails either one.
+
+  $ tree-md build --config unicode/tree-md.toml
+  TM202: warning: "dup" names more than one file; resolved by mdbase link order (nearest folder, then shortest path). Give the tree an `id:` and reference that to say which one you mean
+    --> $TESTCASE_ROOT/unicode/trees-md/refer.tree.md:7:1
+     |
+     | [[dup]] を参照。
+     | ^^^^^^^
+  build: 0 created, 0 replaced, 0 deleted, 6 unchanged
+  $ tree-md check --config unicode/tree-md.toml
+  TM202: warning: "dup" names more than one file; resolved by mdbase link order (nearest folder, then shortest path). Give the tree an `id:` and reference that to say which one you mean
+    --> $TESTCASE_ROOT/unicode/trees-md/refer.tree.md:7:1
+     |
+     | [[dup]] を参照。
+     | ^^^^^^^
+
+A collection may declare what its front matter must look like, in the
+`mdbase.yaml` and `_types/` its other mdbase tools already read. The schema
+is checked against the front matter as written, and reported with mdbase's
+own code beside tree-md's.
+
+  $ printf -- '---\nid: wrong\nstatus: archived\n---\n\n# Wrong\n' > mdbase/trees-md/wrong.tree.md
+  $ tree-md build --config mdbase/tree-md.toml
+  TM101 (schema_enum): error: /status: must be one of "draft", "published" (type "note")
+    --> $TESTCASE_ROOT/mdbase/trees-md/wrong.tree.md:3:9
+     |
+     | status: archived
+     |         ^^^^^^^^
+  [1]
+  $ test ! -e mdbase/generated
+
+`collection.read_defaults` supplies a value for a key the note leaves out. It
+is an effective value: nothing is written back to the note.
+
+  $ printf -- '---\nid: wrong\nstatus: draft\n---\n\n# Fixed\n' > mdbase/trees-md/wrong.tree.md
+  $ tree-md build --config mdbase/tree-md.toml
+  build: 2 created, 0 replaced, 0 deleted, 0 unchanged
+  $ cat mdbase/generated/wrong.tree
+  \title{Fixed}
+  \taxon{Note}
+  $ grep -c taxon mdbase/trees-md/wrong.tree.md
+  0
+  [1]
+
+`[publish].from` names the trees a build starts from, and everything they
+reach comes with them. A note nobody publishes is not compiled at all, so the
+broken link in the diary does not fail the build for the pages that are.
+
+  $ tree-md build --config publish/tree-md.toml
+  build: 3 created, 0 replaced, 0 deleted, 0 unchanged, 1 unpublished
+  $ find publish/generated -name '*.tree' | sort
+  publish/generated/PUBLIC/index.tree
+  publish/generated/PUBLIC/notes.tree
+  publish/generated/private/frege.tree
+
+Without the table every source is published, and the draft's broken link is a
+`TM202` like any other.
+
+  $ sed '/^\[publish\]/,$d' publish/tree-md.toml > publish/all.toml
+  $ tree-md check --config publish/all.toml
+  TM202: error: unresolved wiki link "存在しないノート"
+    --> $TESTCASE_ROOT/publish/trees-md/DAILY/2026-08-19.tree.md:7:1
+     |
+     | [[存在しないノート]]
+     | ^^^^^^^^^^^^
+  [1]

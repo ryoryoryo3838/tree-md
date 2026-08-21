@@ -1,0 +1,6 @@
+spec_version: "0.3.0"
+
+settings:
+  validation: error
+  types_folder: _types
+  id_field: id

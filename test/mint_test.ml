@@ -33,6 +33,7 @@ let config root =
     source_roots = [ (relative "trees-md", Filename.concat root "trees-md") ];
     output_root = (relative "generated", Filename.concat root "generated");
     target = Forester_6.target;
+     publish_from = [];
     id = Config.default_id_policy }
 
 (* The default is random, which no assertion about particular addresses can
@@ -48,7 +49,7 @@ let source root name =
     config_relative = relative ("trees-md/" ^ name ^ ".tree.md");
     source_relative = relative (name ^ ".tree.md");
     output_relative = relative (name ^ ".tree");
-    root_id = name }
+    filename = name }
 
 let discovery root names =
   { Discovery.sources = List.map (source root) names; handwritten_roots = [] }

@@ -1,5 +1,10 @@
 open Tree_md
 
+(* Each compile stage now returns its warnings alongside the value it
+   produced. These suites assert on the value, so they drop the warnings. *)
+let build_outline ~root_id d =
+  Result.map fst (Outline.build ~root_id ~filename:root_id d)
+
 (* ── Test helpers ── *)
 
 let zero_span =
@@ -53,7 +58,7 @@ let custom_para text sp = { Ir.bnode = Ir.Paragraph [text_inline text]; Ir.bspan
 (* ── H1 first: becomes root title, no sections ── *)
 
 let test_h1_root_title () =
-  match Outline.build ~root_id:"test" (doc [heading 1 "My Title"]) with
+  match build_outline ~root_id:"test" (doc [heading 1 "My Title"]) with
   | Ok tree ->
     Alcotest.(check string) "root_id" "test" tree.root_id;
     Alcotest.(check (list string)) "title" ["My Title"] (title_texts tree.title);
@@ -67,7 +72,7 @@ let test_h1_root_title () =
 (* ── No H1: root_id becomes Text node root title ── *)
 
 let test_no_h1_fallback () =
-  match Outline.build ~root_id:"myfile" (doc [para "hello"]) with
+  match build_outline ~root_id:"myfile" (doc [para "hello"]) with
   | Ok tree ->
     Alcotest.(check string) "root_id" "myfile" tree.root_id;
     (match tree.title with
@@ -82,7 +87,7 @@ let test_no_h1_fallback () =
 (* ── H1 with body and H2 sections ── *)
 
 let test_h1_with_body_and_sections () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 1 "Root";
     para "intro";
     heading 2 "A";
@@ -100,7 +105,7 @@ let test_h1_with_body_and_sections () =
 (* ── H2 H3 H3 H2 hierarchy: two root sections, first has two children ── *)
 
 let test_h2_h3_h3_h2 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 2 "A";
     heading 3 "B";
     heading 3 "C";
@@ -127,7 +132,7 @@ let test_h2_h3_h3_h2 () =
 (* ── Body attachment: paragraphs stay in their section ── *)
 
 let test_body_attachment () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 2 "A";
     para "intro";
     heading 3 "B";
@@ -158,7 +163,7 @@ let test_body_attachment () =
 (* ── Same level closes section ── *)
 
 let test_same_level_closes () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 2 "A";
     para "a1";
     heading 2 "B";
@@ -178,7 +183,7 @@ let test_same_level_closes () =
 (* ── Shallower level closes higher level ── *)
 
 let test_shallower_closes_deeper () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 2 "A";
     heading 3 "B";
     para "b1";
@@ -198,7 +203,7 @@ let test_shallower_closes_deeper () =
 (* ── Orphan directive inside section: TM104 ── *)
 
 let test_orphan_directive_in_section () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 2 "A";
     directive "orphan";
     para "body";
@@ -210,7 +215,7 @@ let test_orphan_directive_in_section () =
 (* ── Paragraph then H1: TM103 (H1 not first block) ── *)
 
 let test_para_then_h1 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     para "text";
     heading 1 "Title";
   ]) with
@@ -221,7 +226,7 @@ let test_para_then_h1 () =
 (* ── Second H1: TM103 ── *)
 
 let test_second_h1 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 1 "First";
     heading 1 "Second";
   ]) with
@@ -232,7 +237,7 @@ let test_second_h1 () =
 (* ── H1 after H2: TM103 ── *)
 
 let test_h1_after_h2 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 2 "A";
     heading 1 "B";
   ]) with
@@ -243,7 +248,7 @@ let test_h1_after_h2 () =
 (* ── Directive then H2: named section ── *)
 
 let test_directive_then_h2 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     directive "my.tree";
     heading 2 "Section";
   ]) with
@@ -265,7 +270,7 @@ let test_directive_then_h2 () =
 (* ── Directive, blank lines, H2: named section (blank lines don't exist in IR) ── *)
 
 let test_directive_blank_h2 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     directive "named";
     heading 2 "S";
   ]) with
@@ -281,7 +286,7 @@ let test_directive_blank_h2 () =
 (* ── Directive then paragraph: TM104 ── *)
 
 let test_directive_then_para () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     directive "orphan";
     para "text";
   ]) with
@@ -292,7 +297,7 @@ let test_directive_then_para () =
 (* ── Two directives before H2: TM104 (first directive lost, second applied) ── *)
 
 let test_two_directives_before_h2 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     directive "first";
     directive "second";
     heading 2 "S";
@@ -304,7 +309,7 @@ let test_two_directives_before_h2 () =
 (* ── Directive before H1: TM104 ── *)
 
 let test_directive_before_h1 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     directive "bad";
     heading 1 "Title";
   ]) with
@@ -315,7 +320,7 @@ let test_directive_before_h1 () =
 (* ── Directive applied to H3 (sub-section) ── *)
 
 let test_directive_on_h3 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 2 "A";
     directive "child.tree";
     heading 3 "Child";
@@ -337,7 +342,7 @@ let test_directive_on_h3 () =
 (* ── Definitions: multiple named sections ── *)
 
 let test_multiple_definitions () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     directive "a";
     heading 2 "A";
     directive "b";
@@ -360,7 +365,7 @@ let test_multiple_definitions () =
 let test_definition_span_points_to_directive () =
   let dir_sp = span_at 10 25 in
   let h2_sp = span_at 30 40 in
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     custom_directive "named" dir_sp;
     custom_heading 2 "S" h2_sp;
   ]) with
@@ -392,7 +397,7 @@ let test_section_span_covers_range () =
   let p2_sp = span_at 50 60 in
   let h3_sp = span_at 70 80 in
   let p3_sp = span_at 90 100 in
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     custom_heading 2 "A" h2_sp;
     custom_para "a1" p1_sp;
     custom_para "a2" p2_sp;
@@ -417,7 +422,7 @@ let test_section_span_covers_range () =
 (* ── Root title fallback span is valid ── *)
 
 let test_fallback_span () =
-  match Outline.build ~root_id:"myfile" (doc [para "x"]) with
+  match build_outline ~root_id:"myfile" (doc [para "x"]) with
   | Ok tree ->
     (match tree.title with
      | [{ Ir.span; _ }] ->
@@ -428,10 +433,28 @@ let test_fallback_span () =
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
     Alcotest.fail ("expected Ok, got: " ^ msgs)
 
+(* ── A title falls back to the file, never to the address ── *)
+
+(* An address may be a minted number, and a number is exactly what a title must
+   not be. A note with no H1 — which is how Obsidian is usually written, the
+   file name serving as the title — takes its title from the file. *)
+let test_title_falls_back_to_filename_not_id () =
+  match
+    Result.map fst
+      (Outline.build ~root_id:"V0YI" ~filename:"日本語のノート" (doc [para "x"]))
+  with
+  | Ok tree ->
+    Alcotest.(check (list string)) "titled by the file"
+      [ "日本語のノート" ] (title_texts tree.title);
+    Alcotest.(check string) "addressed by the id" "V0YI" tree.root_id
+  | Error diags ->
+    let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
+    Alcotest.fail ("expected Ok, got: " ^ msgs)
+
 (* ── Empty document: root_id fallback, no errors ── *)
 
 let test_empty_document () =
-  match Outline.build ~root_id:"empty" (doc []) with
+  match build_outline ~root_id:"empty" (doc []) with
   | Ok tree ->
     Alcotest.(check (list string)) "fallback title" ["empty"] (title_texts tree.title);
     Alcotest.(check int) "no body" 0 (List.length (rbody tree));
@@ -443,7 +466,7 @@ let test_empty_document () =
 (* ── H1 plus body then H2: body goes to root ── *)
 
 let test_h1_body_then_h2 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 1 "Root";
     para "intro";
     para "more";
@@ -464,7 +487,7 @@ let test_h1_body_then_h2 () =
 (* ── Non-heading blocks between headings go to correct section ── *)
 
 let test_non_heading_between_headings () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 2 "A";
     para "a_body";
     embed "note";
@@ -494,7 +517,7 @@ let test_non_heading_between_headings () =
 (* ── Directive at end (no heading): TM104 ── *)
 
 let test_directive_at_end () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     para "start";
     directive "unused";
   ]) with
@@ -505,7 +528,7 @@ let test_directive_at_end () =
 (* ── TM103 when only H2, H4: level skipped at H4 ── *)
 
 let test_level_skip_h2_to_h4 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 2 "A";
     heading 4 "D";
   ]) with
@@ -516,7 +539,7 @@ let test_level_skip_h2_to_h4 () =
 (* ── TM103 when H3 appears without H2 ── *)
 
 let test_h3_without_h2 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 3 "No H2";
   ]) with
   | Ok _ -> Alcotest.fail "expected TM103 for H3 without H2"
@@ -526,7 +549,7 @@ let test_h3_without_h2 () =
 (* ── TM103 when H5 appears after H3 ── *)
 
 let test_level_skip_h3_to_h5 () =
-  match Outline.build ~root_id:"t" (doc [
+  match build_outline ~root_id:"t" (doc [
     heading 2 "A";
     heading 3 "B";
     heading 5 "E";
@@ -543,14 +566,14 @@ let close_dir level =
   { Ir.bnode = Ir.Subtree_close level; Ir.bspan = zero_span }
 
 let build_ok blocks =
-  match Outline.build ~root_id:"t" (doc blocks) with
+  match build_outline ~root_id:"t" (doc blocks) with
   | Ok tree -> tree
   | Error diags ->
     let msgs = List.map (fun d -> d.Diagnostic.message) diags |> String.concat "; " in
     Alcotest.fail ("expected Ok, got: " ^ msgs)
 
 let build_err code blocks =
-  match Outline.build ~root_id:"t" (doc blocks) with
+  match build_outline ~root_id:"t" (doc blocks) with
   | Ok _ -> Alcotest.fail ("expected " ^ code)
   | Error diags -> Alcotest.(check bool) code true (has_code diags code)
 
@@ -629,6 +652,8 @@ let () =
         test_case "no_h1_fallback" `Quick test_no_h1_fallback;
         test_case "h1_with_body_and_sections" `Quick test_h1_with_body_and_sections;
         test_case "fallback_span" `Quick test_fallback_span;
+        test_case "title_falls_back_to_filename" `Quick
+          test_title_falls_back_to_filename_not_id;
         test_case "empty_document" `Quick test_empty_document;
       ]
     ; "hierarchy", [

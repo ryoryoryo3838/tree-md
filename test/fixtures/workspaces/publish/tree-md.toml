@@ -1,0 +1,12 @@
+version = 1
+forest = "forest.toml"
+sources = ["trees-md"]
+output = "generated"
+target = "forester-6.0-dev@30b73641cef02433ee158db6ddc77f7b49de60be"
+
+[id]
+mint = "off"
+
+# The vault is the source; the site is what PUBLIC/ reaches.
+[publish]
+from = ["PUBLIC/**"]

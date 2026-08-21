@@ -4,7 +4,7 @@ type source_file = {
   config_relative : Path_safe.relative;
   source_relative : Path_safe.relative;
   output_relative : Path_safe.relative;
-  root_id : string;
+  filename : string;
 }
 
 type handwritten_root = { id : string; path : string }
@@ -110,7 +110,7 @@ let build_source_record root_rel root_abs (path, source_rel_string, stem) =
            config_relative = Path_safe.append root_rel source_relative;
            source_relative;
            output_relative;
-           root_id = stem })
+           filename = stem })
 
 let duplicate_identities diags entries =
   (* [entries] : (id * path) list sorted by id then path *)
@@ -126,9 +126,6 @@ let duplicate_identities diags entries =
   in
   loop diags entries
 
-let source_identities records =
-  List.map (fun record -> (record.root_id, record.path)) records
-
 let collect_sources config =
   let fold (diags, records) (root_rel, root_abs) =
     if has_hidden_component (Path_safe.to_string root_rel) then (diags, records)
@@ -142,21 +139,13 @@ let collect_sources config =
          with
          | Error more -> (more @ diags, records)
          | Ok found ->
-           let invalid, valid =
-             List.partition
-               (fun (_, _, stem) -> not (Metadata.valid_id stem))
-               found
-           in
-           let invalid_diags =
-             List.map
-               (fun (path, _, stem) ->
-                 tm201 path ("invalid root identity \"" ^ stem ^ "\""))
-               invalid
-           in
+           (* Every discovered source is kept. The stem is only a search key
+              now, so nothing about it can disqualify the file; whether the
+              tree has an address is settled later, from its front matter. *)
            let root_records =
-             List.filter_map (build_source_record root_rel root_abs) valid
+             List.filter_map (build_source_record root_rel root_abs) found
            in
-           (invalid_diags @ diags, root_records @ records))
+           (diags, root_records @ records))
       | { Unix.st_kind = _; _ } ->
         (tm404 root_abs "source root is not a directory" :: diags, records)
       | exception Unix.Unix_error (error, _, _) ->
@@ -165,14 +154,13 @@ let collect_sources config =
          :: diags, records)
   in
   let diags, records = List.fold_left fold ([], []) config.Config.source_roots in
+  (* Two folders may each hold a note.tree.md; that is ordinary in a vault and
+     not by itself a collision. Only two trees published at one address are,
+     and Forest_index is where that is seen. Sorting by path alone keeps
+     discovery deterministic without implying the stem means anything. *)
   let records =
-    List.sort
-      (fun a b ->
-        let by_identity = String.compare a.root_id b.root_id in
-        if by_identity <> 0 then by_identity else String.compare a.path b.path)
-      records
+    List.sort (fun (a : source_file) b -> String.compare a.path b.path) records
   in
-  let diags = duplicate_identities diags (source_identities records) in
   (diags, records)
 
 let handwritten_identities records =

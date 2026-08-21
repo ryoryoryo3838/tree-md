@@ -3,13 +3,17 @@ let source_from_string text =
 
 let mask_all text = text
 
+(* Each compile stage now returns its warnings alongside the value it
+   produced. These suites assert on the value, so they drop the warnings. *)
 let parse text =
   let src = source_from_string text in
   Tree_md.Markdown.parse src ~masked_markdown: text Tree_md.Metadata.empty
+  |> Result.map fst
 
 let parse_result text =
   let src = source_from_string text in
   Tree_md.Markdown.parse src ~masked_markdown: text Tree_md.Metadata.empty
+  |> Result.map fst
 
 let has_diag_code diags code =
   List.exists (fun d -> Tree_md.Diagnostic.code_string d.Tree_md.Diagnostic.code = code) diags
@@ -31,6 +35,10 @@ let rec node_to_string = function
   | Tree_md.Ir.Wiki_embed t -> Printf.sprintf "WikiEmbed(%S)" t
   | Tree_md.Ir.Math { tex = t; display = d } ->
     Printf.sprintf "Math(%S %b)" t d
+  | Tree_md.Ir.Strikethrough _ -> "Strikethrough"
+  | Tree_md.Ir.Highlight _ -> "Highlight"
+  | Tree_md.Ir.Footnote_ref { label; number } ->
+    Printf.sprintf "FootnoteRef(%S %d)" label number
   | Tree_md.Ir.Hard_break -> "HardBreak"
   | Tree_md.Ir.Soft_break -> "SoftBreak"
 
@@ -63,6 +71,15 @@ let block_node_to_string = function
   | Tree_md.Ir.Subtree_close level -> Printf.sprintf "SubtreeClose(%d)" level
   | Tree_md.Ir.Block_embed id -> Printf.sprintf "Embed(%S)" id
   | Tree_md.Ir.Display_math tex -> Printf.sprintf "DisplayMath(%S)" tex
+  | Tree_md.Ir.Table { alignment; header; rows } ->
+    Printf.sprintf "Table(%d cols, header=%b, %d rows)"
+      (List.length alignment) (header <> None) (List.length rows)
+  | Tree_md.Ir.Callout { kind; folded; title = _; body } ->
+    Printf.sprintf "Callout(%S folded=%b %d blocks)" kind folded (List.length body)
+  | Tree_md.Ir.Footnote_def { label; body } ->
+    Printf.sprintf "FootnoteDef(%S %d blocks)" label (List.length body)
+  | Tree_md.Ir.Footnotes entries ->
+    Printf.sprintf "Footnotes(%d)" (List.length entries)
 
 (* ── Basic block fixtures ── *)
 
@@ -399,7 +416,10 @@ let test_heading_anchor_and_directive_conflict () =
     let msgs = List.map (fun d -> d.Tree_md.Diagnostic.message) diags |> String.concat "; " in
     Alcotest.fail ("expected the document to parse, got: " ^ msgs)
   | Ok doc -> (
-    match Tree_md.Outline.build ~root_id:"notes" doc with
+    match
+      Result.map fst
+        (Tree_md.Outline.build ~root_id:"notes" ~filename:"notes" doc)
+    with
     | Ok _ -> Alcotest.fail "expected naming a subtree twice to be rejected"
     | Error diags -> Alcotest.(check bool) "has TM104" true (has_diag_code diags "TM104"))
 
@@ -477,27 +497,79 @@ let test_raw_html_block_rejected () =
 
 (* ── Diagnostic: GFM table ── *)
 
-let test_gfm_table_rejected () =
-  match parse "| a | b |\n| - | - |\n| 1 | 2 |" with
+(* HTML has a table, and Forester reaches it through its html namespace, so a
+   GFM table has a faithful output. Ragged rows are padded to the column count
+   here so that emission never has to reason about them. *)
+let test_gfm_table_lowered () =
+  match parse "| a | b |\n| - | - |\n| 1 |" with
   | Error diags ->
-    Alcotest.(check bool) "GFM table TM102" true (has_diag_code diags "TM102")
-  | Ok _ -> Alcotest.fail "expected TM102 for GFM table"
+    Alcotest.fail ("GFM table rejected: "
+                   ^ String.concat "; "
+                       (List.map (fun d -> d.Tree_md.Diagnostic.message) diags))
+  | Ok doc ->
+    Alcotest.(check (list string)) "one padded table"
+      [ "Table(2 cols, header=true, 1 rows)" ]
+      (List.map (fun b -> block_node_to_string b.Tree_md.Ir.bnode) doc.blocks)
 
 (* ── Diagnostic: task marker ── *)
 
-let test_task_marker_rejected () =
-  match parse "- [ ] task" with
+(* A task marker is a checkbox, which HTML has and Forester can reach. *)
+let test_task_marker_lowered () =
+  match parse "- [ ] todo\n- [x] done" with
   | Error diags ->
-    Alcotest.(check bool) "task marker TM102" true (has_diag_code diags "TM102")
-  | Ok _ -> Alcotest.fail "expected TM102 for task marker"
+    Alcotest.fail ("task list rejected: "
+                   ^ String.concat "; "
+                       (List.map (fun d -> d.Tree_md.Diagnostic.message) diags))
+  | Ok doc ->
+    (match doc.blocks with
+     | [ { Tree_md.Ir.bnode = Tree_md.Ir.List { items; _ }; _ } ] ->
+       Alcotest.(check (list bool)) "both carry a marker" [ true; true ]
+         (List.map
+            (fun (i : Tree_md.Ir.list_item) -> i.Tree_md.Ir.item_task <> None)
+            items)
+     | _ -> Alcotest.fail "expected a single list")
 
 (* ── Diagnostic: footnote ── *)
 
-let test_footnote_rejected () =
+(* A definition nothing refers to renders nothing, so it is dropped rather
+   than emitted as an empty section. *)
+let test_unreferenced_footnote_dropped () =
   match parse "[^1]: note" with
   | Error diags ->
-    Alcotest.(check bool) "footnote TM102" true (has_diag_code diags "TM102")
-  | Ok _ -> Alcotest.fail "expected TM102 for footnote"
+    Alcotest.fail ("footnote rejected: "
+                   ^ String.concat "; "
+                       (List.map (fun d -> d.Tree_md.Diagnostic.message) diags))
+  | Ok doc ->
+    Alcotest.(check (list string)) "definition removed from the flow" []
+      (List.map (fun b -> block_node_to_string b.Tree_md.Ir.bnode) doc.blocks)
+
+(* Numbering follows the order references appear, not the order definitions
+   do, and the definitions are gathered into one section at the end. *)
+let test_footnotes_numbered_by_reference () =
+  match parse "See[^b] and[^a].\n\n[^a]: second\n[^b]: first" with
+  | Error diags ->
+    Alcotest.fail ("footnotes rejected: "
+                   ^ String.concat "; "
+                       (List.map (fun d -> d.Tree_md.Diagnostic.message) diags))
+  | Ok doc ->
+    let rendered =
+      List.map (fun b -> block_node_to_string b.Tree_md.Ir.bnode) doc.blocks
+    in
+    Alcotest.(check bool) "one footnote section at the end" true
+      (match List.rev rendered with
+       | "Footnotes(2)" :: _ -> true
+       | _ -> false);
+    (* [^b] is written first, so it is 1, even though [^a] is defined first. *)
+    Alcotest.(check (list int)) "numbered by reference order" [ 1; 2 ]
+      (match doc.blocks with
+       | { Tree_md.Ir.bnode = Tree_md.Ir.Paragraph inlines; _ } :: _ ->
+         List.filter_map
+           (fun (i : Tree_md.Ir.inline) ->
+             match i.Tree_md.Ir.node with
+             | Tree_md.Ir.Footnote_ref { number; _ } -> Some number
+             | _ -> None)
+           inlines
+       | _ -> [])
 
 (* ── Diagnostic: fenced math (reject exactly "math") ── *)
 
@@ -753,9 +825,10 @@ let () =
     ; "standalone_anchor_dropped", [ test_case "standalone_anchor_dropped" `Quick test_standalone_anchor_dropped ]
     ; "display_math_normalization", [ test_case "display_math_normalization" `Quick test_display_math_normalization ]
     ; "raw_html_block_rejected", [ test_case "raw_html_block_rejected" `Quick test_raw_html_block_rejected ]
-    ; "gfm_table_rejected", [ test_case "gfm_table_rejected" `Quick test_gfm_table_rejected ]
-    ; "task_marker_rejected", [ test_case "task_marker_rejected" `Quick test_task_marker_rejected ]
-    ; "footnote_rejected", [ test_case "footnote_rejected" `Quick test_footnote_rejected ]
+    ; "gfm_table_rejected", [ test_case "gfm_table_lowered" `Quick test_gfm_table_lowered ]
+    ; "task_marker_rejected", [ test_case "task_marker_lowered" `Quick test_task_marker_lowered ]
+    ; "footnote_rejected", [ test_case "unreferenced_footnote_dropped" `Quick test_unreferenced_footnote_dropped;
+        test_case "footnotes_numbered_by_reference" `Quick test_footnotes_numbered_by_reference ]
     ; "fenced_math_rejected", [ test_case "fenced_math_rejected" `Quick test_fenced_math_rejected ]
     ; "multi_token_fence_rejected", [ test_case "multi_token_fence_rejected" `Quick test_multi_token_fence_rejected ]
     ; "invalid_lang_token_rejected", [ test_case "invalid_lang_token_rejected" `Quick test_invalid_lang_token_rejected ]

@@ -1,5 +1,10 @@
 open Tree_md
 
+(* Resolution now returns its warnings alongside the per-document results;
+   these suites assert on the results. *)
+let resolve_forest forest index ~documents =
+  Result.map fst (Forest_index.resolve forest index ~documents)
+
 let relative value =
   match Path_safe.relative value with
   | Ok relative -> relative
@@ -55,7 +60,10 @@ let with_symlink ~target ~link f =
 let parse_doc ~root_id ~path text =
   match Source.of_string ~path text with
   | Ok source ->
-    (match Compiler.parse ~root_id source with
+    (match
+       Result.map fst
+         (Compiler.parse ~default_id:root_id ~filename:root_id source)
+     with
      | Ok doc -> doc
      | Error diagnostics ->
        let messages =
@@ -117,6 +125,19 @@ let primary_of code diagnostics =
                           diagnostics))
 
 (* ── build: duplicate identity diagnostics ── *)
+
+let render_diagnostics name diagnostics =
+  let messages =
+    List.map (fun d ->
+      Printf.sprintf "%s: %s" (Diagnostic.code_string d.Diagnostic.code)
+        d.Diagnostic.message)
+      diagnostics
+    |> String.concat "; "
+  in
+  name ^ ": " ^ messages
+
+(* An editor that addresses notes by filename writes `[[beta.tree]]` for the
+   tree stored in `beta.tree.md`, whose identity is `beta`. *)
 
 let test_duplicate_generated_roots () =
   with_fixture (fun root ->
@@ -263,7 +284,7 @@ let test_unresolved_wiki_link () =
     let doc = parse_doc ~root_id:"a" ~path:path "# A\n\n[[missing]]\n" in
     let index = expect_build "wiki index" ~handwritten:[] ~generated:[ doc ] in
     let forest = make_forest ~root ~asset_roots:["assets"] in
-    match Forest_index.resolve forest index ~documents:[ doc ] with
+    match resolve_forest forest index ~documents:[ doc ] with
     | Ok _ -> Alcotest.fail "unresolved wiki link accepted"
     | Error diagnostics ->
       let diag = primary_of "TM202" diagnostics in
@@ -281,7 +302,7 @@ let test_unresolved_embed () =
     in
     let index = expect_build "embed index" ~handwritten:[] ~generated:[ doc ] in
     let forest = make_forest ~root ~asset_roots:["assets"] in
-    match Forest_index.resolve forest index ~documents:[ doc ] with
+    match resolve_forest forest index ~documents:[ doc ] with
     | Ok _ -> Alcotest.fail "unresolved embed accepted"
     | Error diagnostics ->
       let diag = primary_of "TM202" diagnostics in
@@ -300,7 +321,7 @@ let test_unresolved_attributions () =
     let doc = parse_doc ~root_id:"a" ~path:path text in
     let index = expect_build "attribution index" ~handwritten:[] ~generated:[ doc ] in
     let forest = make_forest ~root ~asset_roots:["assets"] in
-    match Forest_index.resolve forest index ~documents:[ doc ] with
+    match resolve_forest forest index ~documents:[ doc ] with
     | Ok _ -> Alcotest.fail "unresolved attributions accepted"
     | Error diagnostics ->
       let tm202 =
@@ -316,25 +337,150 @@ let test_unresolved_attributions () =
         (List.exists (fun d -> contains d.Diagnostic.message "missing-contrib")
            tm202))
 
-let test_literal_attribution_and_plain_link_ignored () =
+(* A literal attribution names a person, not a tree, so it resolves to
+   nothing and is left alone. *)
+let test_literal_attribution_ignored () =
   with_fixture (fun root ->
     let path = Filename.concat root "trees-md/a.tree.md" in
-    let text =
-      "---\n" ^
-      "authors: [\"Ada Lovelace\"]\n" ^
-      "---\n# A\n\n[visit](notes/other.md)\n"
-    in
+    let text = "---\nauthors: [\"Ada Lovelace\"]\n---\n# A\n\nBody.\n" in
     let doc = parse_doc ~root_id:"a" ~path:path text in
     let index = expect_build "literal index" ~handwritten:[] ~generated:[ doc ] in
     let forest = make_forest ~root ~asset_roots:["assets"] in
-    match Forest_index.resolve forest index ~documents:[ doc ] with
+    match resolve_forest forest index ~documents:[ doc ] with
     | Ok results ->
       Alcotest.(check (list string)) "one per-document resolution"
         [ "a" ] (List.map fst results)
     | Error diagnostics ->
       let messages = List.map (fun d -> d.Diagnostic.message) diagnostics in
-      Alcotest.fail ("literal attribution or plain link rejected: "
+      Alcotest.fail ("literal attribution rejected: "
                      ^ String.concat "; " messages))
+
+(* In Forester `[label](addr)` is a tree reference, not a URL, so a Markdown
+   link with a local destination is resolved like any other reference — mdbase
+   v0.3 §08 counts one as a link too. Passing it through untouched used to put
+   a reference to an address no tree has into the output. *)
+let test_markdown_link_resolves () =
+  with_fixture (fun root ->
+    let referring =
+      parse_doc ~root_id:"a" ~path:(Filename.concat root "trees-md/a.tree.md")
+        "# A\n\n[visit](notes/other.md)\n"
+    in
+    let target =
+      parse_doc ~root_id:"OTH1"
+        ~path:(Filename.concat root "trees-md/notes/other.tree.md") "# Other\n"
+    in
+    let documents = [ referring; target ] in
+    let index = expect_build "link index" ~handwritten:[] ~generated:documents in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match resolve_forest forest index ~documents with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "markdown link rejected" diagnostics)
+    | Ok results ->
+      let resolution = List.assoc "a" results in
+      Alcotest.(check (option string)) "emitted as the identity" (Some "OTH1")
+        (Resolution.tree_id resolution
+           (List.hd referring.Parsed_document.references).Ir.span))
+
+(* Only a wiki link is closed-world. A Markdown link was never checked at all
+   before, so an unresolvable one does not fail a build that used to pass: it
+   is emitted as written. A destination ending in `.md` can only have meant a
+   note, so that one warns. *)
+let test_markdown_link_unresolved_warns () =
+  with_fixture (fun root ->
+    let doc =
+      parse_doc ~root_id:"a" ~path:(Filename.concat root "trees-md/a.tree.md")
+        "# A\n\n[visit](notes/missing.md)\n"
+    in
+    let index = expect_build "link index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match Forest_index.resolve forest index ~documents:[ doc ] with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "an unresolved link failed" diagnostics)
+    | Ok (_results, warnings) ->
+      Alcotest.(check int) "one warning" 1 (List.length warnings);
+      Alcotest.(check bool) "a warning, not an error" false
+        (Diagnostic.has_error warnings))
+
+(* A forest legitimately writes a URL rooted at the site. It names no tree and
+   never did, so it is not offered to resolution at all. *)
+let test_root_relative_link_is_not_a_reference () =
+  with_fixture (fun root ->
+    let doc =
+      parse_doc ~root_id:"a" ~path:(Filename.concat root "trees-md/a.tree.md")
+        "# A\n\n[reset](/) and [feed](/index/index.xml)\n"
+    in
+    let index = expect_build "link index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match Forest_index.resolve forest index ~documents:[ doc ] with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "a site URL was rejected" diagnostics)
+    | Ok (_results, warnings) ->
+      Alcotest.(check int) "silent" 0 (List.length warnings))
+
+(* A relative destination that is not a note and does not resolve is left
+   alone: it may name something the forest does not own. *)
+let test_unresolved_non_note_link_is_silent () =
+  with_fixture (fun root ->
+    let doc =
+      parse_doc ~root_id:"a" ~path:(Filename.concat root "trees-md/a.tree.md")
+        "# A\n\n[paper](papers/2026.pdf)\n"
+    in
+    let index = expect_build "link index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match Forest_index.resolve forest index ~documents:[ doc ] with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "a relative URL was rejected" diagnostics)
+    | Ok (_results, warnings) ->
+      Alcotest.(check int) "silent" 0 (List.length warnings))
+
+(* A reference written in a heading used to be collected nowhere, so it was
+   never resolved and never checked. *)
+let test_reference_in_a_title_resolves () =
+  with_fixture (fun root ->
+    let referring =
+      parse_doc ~root_id:"a" ~path:(Filename.concat root "trees-md/a.tree.md")
+        "# A\n\n## See [[other]]\n"
+    in
+    let target =
+      parse_doc ~root_id:"OTH1" ~path:(Filename.concat root "trees-md/other.tree.md")
+        "# Other\n"
+    in
+    let documents = [ referring; target ] in
+    let index = expect_build "title index" ~handwritten:[] ~generated:documents in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match resolve_forest forest index ~documents with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "a title reference was rejected" diagnostics)
+    | Ok results ->
+      let resolution = List.assoc "a" results in
+      Alcotest.(check (option string)) "emitted as the identity" (Some "OTH1")
+        (Resolution.tree_id resolution
+           (List.hd referring.Parsed_document.references).Ir.span))
+
+let test_unresolved_reference_in_a_title_errors () =
+  with_fixture (fun root ->
+    let doc =
+      parse_doc ~root_id:"a" ~path:(Filename.concat root "trees-md/a.tree.md")
+        "# A\n\n## See [[nothing]]\n"
+    in
+    let index = expect_build "title index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    expect_code "unresolved title reference" "TM202"
+      (resolve_forest forest index ~documents:[ doc ]))
+
+(* An external URL is not a tree reference and is never resolved. *)
+let test_external_link_not_resolved () =
+  with_fixture (fun root ->
+    let doc =
+      parse_doc ~root_id:"a" ~path:(Filename.concat root "trees-md/a.tree.md")
+        "# A\n\n[visit](https://example.test/x) and [mail](mailto:a@example.test)\n"
+    in
+    let index = expect_build "external index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match resolve_forest forest index ~documents:[ doc ] with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "external link rejected" diagnostics)
+    | Ok _ -> ())
 
 (* ── assets: TM203 / TM204 / TM205 and routed paths ── *)
 
@@ -354,7 +500,7 @@ let test_asset_zero_matches () =
     let index = expect_build "missing asset index" ~handwritten:[] ~generated:[ doc ] in
     let forest = make_forest ~root ~asset_roots:["assets"] in
     expect_code "zero asset matches" "TM203"
-      (Forest_index.resolve forest index ~documents:[ doc ]))
+      (resolve_forest forest index ~documents:[ doc ]))
 
 let test_asset_ambiguous_two_roots () =
   with_fixture (fun root ->
@@ -363,7 +509,7 @@ let test_asset_ambiguous_two_roots () =
     let doc = image_doc ~root ~destination:"images/x.png" in
     let index = expect_build "ambiguous index" ~handwritten:[] ~generated:[ doc ] in
     let forest = make_forest ~root ~asset_roots:[ "assets"; "assets-alt" ] in
-    match Forest_index.resolve forest index ~documents:[ doc ] with
+    match resolve_forest forest index ~documents:[ doc ] with
     | Ok _ -> Alcotest.fail "ambiguous asset accepted"
     | Error diagnostics ->
       let diag = primary_of "TM204" diagnostics in
@@ -376,7 +522,7 @@ let test_asset_single_match_routes () =
     let doc = image_doc ~root ~destination:"images/x.png" in
     let index = expect_build "routed index" ~handwritten:[] ~generated:[ doc ] in
     let forest = make_forest ~root ~asset_roots:["assets"] in
-    match Forest_index.resolve forest index ~documents:[ doc ] with
+    match resolve_forest forest index ~documents:[ doc ] with
     | Ok results ->
       (match results with
        | [ (root_id, resolution) ] ->
@@ -398,7 +544,7 @@ let test_asset_symlink_file_escape () =
       let doc = image_doc ~root ~destination:"images/x.png" in
       let index = expect_build "symlink index" ~handwritten:[] ~generated:[ doc ] in
       let forest = make_forest ~root ~asset_roots:["assets"] in
-      match Forest_index.resolve forest index ~documents:[ doc ] with
+      match resolve_forest forest index ~documents:[ doc ] with
       | Ok _ -> Alcotest.fail "symlinked asset accepted"
       | Error diagnostics ->
         let diag = primary_of "TM205" diagnostics in
@@ -415,7 +561,7 @@ let test_asset_symlinked_directory_escape () =
       let index = expect_build "dir symlink index" ~handwritten:[] ~generated:[ doc ] in
       let forest = make_forest ~root ~asset_roots:["assets"] in
       expect_code "symlinked directory escape" "TM205"
-        (Forest_index.resolve forest index ~documents:[ doc ])))
+        (resolve_forest forest index ~documents:[ doc ])))
 
 let test_asset_hidden_destination () =
   with_fixture (fun root ->
@@ -423,7 +569,7 @@ let test_asset_hidden_destination () =
     let index = expect_build "hidden index" ~handwritten:[] ~generated:[ doc ] in
     let forest = make_forest ~root ~asset_roots:["assets"] in
     expect_code "hidden destination" "TM205"
-      (Forest_index.resolve forest index ~documents:[ doc ]))
+      (resolve_forest forest index ~documents:[ doc ]))
 
 let test_asset_unsafe_destination () =
   with_fixture (fun root ->
@@ -431,22 +577,165 @@ let test_asset_unsafe_destination () =
     let index = expect_build "unsafe index" ~handwritten:[] ~generated:[ doc ] in
     let forest = make_forest ~root ~asset_roots:["assets"] in
     expect_code "unsafe destination" "TM205"
-      (Forest_index.resolve forest index ~documents:[ doc ]))
+      (resolve_forest forest index ~documents:[ doc ]))
+
+
+(* ── file names that are not addresses, and the paths that reach them ── *)
+
+(* Obsidian autocompletes file names, and a file may be called 日本語のノート
+   or "My Note". The reference resolves to the identity, never the spelling. *)
+let test_nonascii_filename_resolves_to_id () =
+  with_fixture (fun root ->
+    let alpha =
+      parse_doc ~root_id:"alpha" ~path:(Filename.concat root "trees-md/alpha.tree.md")
+        "# Alpha\n\n[[日本語のノート]] and [[My Note]]\n"
+    in
+    let japanese =
+      parse_doc ~root_id:"FRK2"
+        ~path:(Filename.concat root "trees-md/日本語のノート.tree.md")
+        "# 日本語\n"
+    in
+    let spaced =
+      parse_doc ~root_id:"P34G"
+        ~path:(Filename.concat root "trees-md/My Note.tree.md")
+        "# Spaced\n"
+    in
+    let documents = [ alpha; japanese; spaced ] in
+    let index = expect_build "unicode index" ~handwritten:[] ~generated:documents in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match resolve_forest forest index ~documents with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "unicode file names rejected" diagnostics)
+    | Ok results ->
+      let resolution = List.assoc "alpha" results in
+      let ids =
+        List.map
+          (fun (r : Ir.reference) -> Resolution.tree_id resolution r.Ir.span)
+          alpha.Parsed_document.references
+      in
+      (* References come out of the collector in reverse source order, which
+         nothing depends on, so compare them as a set. *)
+      Alcotest.(check (list (option string))) "both resolve to identities"
+        [ Some "FRK2"; Some "P34G" ] (List.sort compare ids))
+
+(* An editor sometimes writes the whole file name. Stripping is cumulative, so
+   `[[note.tree.md]]`, `[[note.tree]]` and `[[note]]` all reach the same tree. *)
+let test_md_suffix_resolves () =
+  with_fixture (fun root ->
+    let alpha =
+      parse_doc ~root_id:"alpha" ~path:(Filename.concat root "trees-md/alpha.tree.md")
+        "# Alpha\n\n[[notes.tree.md]] and [[notes.md]]\n"
+    in
+    let notes =
+      parse_doc ~root_id:"mlnet-7"
+        ~path:(Filename.concat root "trees-md/notes.tree.md") "# Notes\n"
+    in
+    let documents = [ alpha; notes ] in
+    let index = expect_build "md suffix index" ~handwritten:[] ~generated:documents in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match resolve_forest forest index ~documents with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics ".md-suffixed references rejected" diagnostics)
+    | Ok results ->
+      let resolution = List.assoc "alpha" results in
+      let ids =
+        List.map
+          (fun (r : Ir.reference) -> Resolution.tree_id resolution r.Ir.span)
+          alpha.Parsed_document.references
+      in
+      Alcotest.(check (list (option string))) "both reach the identity"
+        [ Some "mlnet-7"; Some "mlnet-7" ] ids)
+
+(* A target carrying a separator is resolved path-style, per mdbase v0.3 §08. *)
+let test_path_style_target_resolves () =
+  with_fixture (fun root ->
+    let alpha =
+      parse_doc ~root_id:"alpha" ~path:(Filename.concat root "trees-md/alpha.tree.md")
+        "# Alpha\n\n[[people/alice]]\n"
+    in
+    let alice =
+      parse_doc ~root_id:"AL1C"
+        ~path:(Filename.concat root "trees-md/people/alice.tree.md") "# Alice\n"
+    in
+    let documents = [ alpha; alice ] in
+    let index = expect_build "path index" ~handwritten:[] ~generated:documents in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match resolve_forest forest index ~documents with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "path-style reference rejected" diagnostics)
+    | Ok results ->
+      let resolution = List.assoc "alpha" results in
+      Alcotest.(check (option string)) "reaches the identity" (Some "AL1C")
+        (Resolution.tree_id resolution
+           (List.hd alpha.Parsed_document.references).Ir.span))
+
+(* Two folders may each hold a dup.tree.md. mdbase v0.3 §08 fixes the order —
+   nearest folder, then shortest path — and picking one is said out loud. *)
+let test_ambiguous_filename_warns_and_prefers_own_folder () =
+  with_fixture (fun root ->
+    let refer =
+      parse_doc ~root_id:"refer"
+        ~path:(Filename.concat root "trees-md/b/refer.tree.md")
+        "# Refer\n\n[[dup]]\n"
+    in
+    let in_a =
+      parse_doc ~root_id:"dupA" ~path:(Filename.concat root "trees-md/a/dup.tree.md")
+        "# A\n"
+    in
+    let in_b =
+      parse_doc ~root_id:"dupB" ~path:(Filename.concat root "trees-md/b/dup.tree.md")
+        "# B\n"
+    in
+    let documents = [ refer; in_a; in_b ] in
+    let index = expect_build "dup index" ~handwritten:[] ~generated:documents in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match Forest_index.resolve forest index ~documents with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "repeated file name rejected" diagnostics)
+    | Ok (results, warnings) ->
+      let resolution = List.assoc "refer" results in
+      Alcotest.(check (option string)) "the referring folder's own file wins"
+        (Some "dupB")
+        (Resolution.tree_id resolution
+           (List.hd refer.Parsed_document.references).Ir.span);
+      (* Settled by the folder rule, so nothing had to be guessed. *)
+      Alcotest.(check int) "no warning when the folder settles it" 0
+        (List.length warnings))
+
+(* An asset path names a file on disk, so what is looked up is what the note
+   wrote — not its percent-encoded spelling. *)
+let test_nonascii_asset_resolves () =
+  with_fixture (fun root ->
+    write_file (Filename.concat root "assets/images/日本語.png") "png\n";
+    let doc = image_doc ~root ~destination:"images/日本語.png" in
+    let index = expect_build "unicode asset index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match resolve_forest forest index ~documents:[ doc ] with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "unicode asset rejected" diagnostics)
+    | Ok [ (_, resolution) ] ->
+      Alcotest.(check (option string)) "routed under the written name"
+        (Some "assets/images/日本語.png")
+        (Resolution.asset_route resolution (asset_span doc))
+    | Ok _ -> Alcotest.fail "expected one per-document resolution")
+
+let test_spaced_asset_resolves () =
+  with_fixture (fun root ->
+    write_file (Filename.concat root "assets/images/my plot.png") "png\n";
+    let doc = image_doc ~root ~destination:"<images/my plot.png>" in
+    let index = expect_build "spaced asset index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match resolve_forest forest index ~documents:[ doc ] with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "spaced asset rejected" diagnostics)
+    | Ok [ (_, resolution) ] ->
+      Alcotest.(check (option string)) "routed under the written name"
+        (Some "assets/images/my plot.png")
+        (Resolution.asset_route resolution (asset_span doc))
+    | Ok _ -> Alcotest.fail "expected one per-document resolution")
 
 (* ── end-to-end: everything resolvable at once ── *)
 
-let render_diagnostics name diagnostics =
-  let messages =
-    List.map (fun d ->
-      Printf.sprintf "%s: %s" (Diagnostic.code_string d.Diagnostic.code)
-        d.Diagnostic.message)
-      diagnostics
-    |> String.concat "; "
-  in
-  name ^ ": " ^ messages
-
-(* An editor that addresses notes by filename writes `[[beta.tree]]` for the
-   tree stored in `beta.tree.md`, whose identity is `beta`. *)
 let test_tree_suffix_reference_resolves () =
   with_fixture (fun root ->
     let alpha =
@@ -464,7 +753,7 @@ let test_tree_suffix_reference_resolves () =
     let documents = [ alpha; beta; gamma ] in
     let index = expect_build "suffix index" ~handwritten:[] ~generated:documents in
     let forest = make_forest ~root ~asset_roots:["assets"] in
-    match Forest_index.resolve forest index ~documents with
+    match resolve_forest forest index ~documents with
     | Error diagnostics ->
       Alcotest.fail (render_diagnostics "suffixed references rejected" diagnostics)
     | Ok results ->
@@ -498,7 +787,7 @@ let test_tree_suffix_exact_match_wins () =
     let documents = [ alpha; beta; beta_tree ] in
     let index = expect_build "exact index" ~handwritten:[] ~generated:documents in
     let forest = make_forest ~root ~asset_roots:["assets"] in
-    match Forest_index.resolve forest index ~documents with
+    match resolve_forest forest index ~documents with
     | Error diagnostics ->
       Alcotest.fail (render_diagnostics "exact match rejected" diagnostics)
     | Ok results ->
@@ -515,7 +804,7 @@ let test_tree_suffix_unresolved_still_errors () =
     in
     let index = expect_build "missing index" ~handwritten:[] ~generated:[ doc ] in
     let forest = make_forest ~root ~asset_roots:["assets"] in
-    Forest_index.resolve forest index ~documents:[ doc ]
+    resolve_forest forest index ~documents:[ doc ]
     |> expect_code "suffixed miss" "TM202")
 
 (* Once a tree states its own `id` it is no longer called after its file, but
@@ -535,7 +824,7 @@ let test_filename_resolves_to_id () =
     let documents = [ alpha; note ] in
     let index = expect_build "filename index" ~handwritten:[] ~generated:documents in
     let forest = make_forest ~root ~asset_roots:["assets"] in
-    match Forest_index.resolve forest index ~documents with
+    match resolve_forest forest index ~documents with
     | Error diagnostics ->
       Alcotest.fail (render_diagnostics "file-name references rejected" diagnostics)
     | Ok results ->
@@ -569,7 +858,7 @@ let test_identity_beats_filename () =
     let documents = [ alpha; named_beta; is_beta ] in
     let index = expect_build "identity index" ~handwritten:[] ~generated:documents in
     let forest = make_forest ~root ~asset_roots:["assets"] in
-    match Forest_index.resolve forest index ~documents with
+    match resolve_forest forest index ~documents with
     | Error diagnostics ->
       Alcotest.fail (render_diagnostics "identity lost to a file name" diagnostics)
     | Ok results ->
@@ -586,8 +875,11 @@ let test_forest_wide_resolution_ok () =
     let alpha_text =
       "---\n" ^
       "authors: [\"Ada Lovelace\"]\n" ^
+      (* A local Markdown link is a tree reference now, so it names one that
+         exists; an external URL is left alone. *)
       "---\n# Alpha\n\n[[beta]]\n\n![[gamma]]\n\n\
-       [visit](notes/other.md)\n\n![Plot](images/x.png)\n"
+       [visit](beta.md)\n\n[out](https://example.test/x)\n\n\
+       ![Plot](images/x.png)\n"
     in
     let alpha =
       parse_doc ~root_id:"alpha" ~path:alpha_path alpha_text
@@ -602,7 +894,7 @@ let test_forest_wide_resolution_ok () =
         ~generated:[ alpha; beta; gamma ]
     in
     let forest = make_forest ~root ~asset_roots:["assets"] in
-    match Forest_index.resolve forest index ~documents:[ alpha; beta; gamma ] with
+    match resolve_forest forest index ~documents:[ alpha; beta; gamma ] with
     | Ok results ->
       Alcotest.(check (list string)) "one resolution per document"
         [ "alpha"; "beta"; "gamma" ] (List.map fst results);
@@ -632,12 +924,27 @@ let () =
         test_case "unresolved_wiki_link" `Quick test_unresolved_wiki_link;
         test_case "unresolved_embed" `Quick test_unresolved_embed;
         test_case "unresolved_attributions" `Quick test_unresolved_attributions;
-        test_case "literal_and_plain_link_ignored" `Quick test_literal_attribution_and_plain_link_ignored;
+        test_case "literal_attribution_ignored" `Quick test_literal_attribution_ignored;
+        test_case "markdown_link_resolves" `Quick test_markdown_link_resolves;
+        test_case "markdown_link_unresolved_warns" `Quick test_markdown_link_unresolved_warns;
+        test_case "root_relative_link_is_not_a_reference" `Quick
+          test_root_relative_link_is_not_a_reference;
+        test_case "unresolved_non_note_link_is_silent" `Quick
+          test_unresolved_non_note_link_is_silent;
+        test_case "reference_in_a_title_resolves" `Quick test_reference_in_a_title_resolves;
+        test_case "unresolved_reference_in_a_title_errors" `Quick
+          test_unresolved_reference_in_a_title_errors;
+        test_case "external_link_not_resolved" `Quick test_external_link_not_resolved;
         test_case "tree_suffix_resolves" `Quick test_tree_suffix_reference_resolves;
         test_case "tree_suffix_exact_match_wins" `Quick test_tree_suffix_exact_match_wins;
         test_case "tree_suffix_unresolved_errors" `Quick test_tree_suffix_unresolved_still_errors;
         test_case "filename_resolves_to_id" `Quick test_filename_resolves_to_id;
         test_case "identity_beats_filename" `Quick test_identity_beats_filename;
+        test_case "nonascii_filename_resolves" `Quick test_nonascii_filename_resolves_to_id;
+        test_case "md_suffix_resolves" `Quick test_md_suffix_resolves;
+        test_case "path_style_target_resolves" `Quick test_path_style_target_resolves;
+        test_case "ambiguous_filename_prefers_own_folder" `Quick
+          test_ambiguous_filename_warns_and_prefers_own_folder;
       ]
     ; "assets", [
         test_case "zero_matches_tm203" `Quick test_asset_zero_matches;
@@ -647,6 +954,8 @@ let () =
         test_case "symlinked_directory_escape_tm205" `Quick test_asset_symlinked_directory_escape;
         test_case "hidden_destination_tm205" `Quick test_asset_hidden_destination;
         test_case "unsafe_destination_tm205" `Quick test_asset_unsafe_destination;
+        test_case "nonascii_asset_resolves" `Quick test_nonascii_asset_resolves;
+        test_case "spaced_asset_resolves" `Quick test_spaced_asset_resolves;
       ]
     ; "forest_wide", [
         test_case "forest_wide_resolution_ok" `Quick test_forest_wide_resolution_ok;

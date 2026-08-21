@@ -1,0 +1,10 @@
+version = 1
+forest = "forest.toml"
+sources = ["trees-md"]
+output = "generated"
+target = "forester-6.0-dev@30b73641cef02433ee158db6ddc77f7b49de60be"
+
+# Sequential so the addresses this workspace is given are the same every run,
+# which is what lets the cram scenario assert them.
+[id]
+scheme = "sequential"

@@ -1,19 +1,30 @@
+(* Reading front matter is two jobs, and they are kept apart.
+
+   Parsing produces [frontmatter]: the mapping exactly as written, in the JSON
+   data model, knowing nothing about what any key means. mdbase v0.3 §03 is
+   explicit that front matter is an arbitrary mapping, so a key this compiler
+   has no use for is carried rather than rejected.
+
+   Interpretation is a separate pass: Metadata.of_yaml reads the keys tree-md
+   emits out of that mapping, and it happens in the compiler, where the
+   collection's own settings are known. *)
 type t = {
-  metadata : Metadata.raw;
+  frontmatter : Yaml_json.t option;
   masked_markdown : string;
 }
 
-(* Meta names that may be written as top-level keys instead of nested under
-   `meta:`, so that an editor showing front matter as a property list can edit
-   them directly. The set is closed, which keeps a misspelled name a TM101
-   rather than a silently emitted `\meta{}`; `meta:` remains available for any
-   name outside it. *)
-let promoted_meta_keys =
-  ["position"; "institution"; "venue"; "source"; "doi"; "orcid";
-   "external"; "slides"; "video"; "bibtex"; "author"; "toc"; "lang"]
-
-let reserved_keys = ["id"; "date"; "taxon"; "authors"; "contributors"; "tags"; "meta"]
-let all_known_keys = reserved_keys @ promoted_meta_keys
+(* The events arrive as a stream, so the tree is assembled with an explicit
+   stack rather than by recursion. *)
+type frame =
+  | Mapping of {
+      mutable entries : Yaml_json.field list;
+      mutable pending : (string * Span.t) option;
+      start : Yaml.Stream.Mark.t;
+    }
+  | Sequence of {
+      mutable items : Yaml_json.t list;
+      start : Yaml.Stream.Mark.t;
+    }
 
 let trim_crlf_end s =
   let len = String.length s in
@@ -87,9 +98,9 @@ let parse source =
 
   (* Check for opening --- at byte 0 *)
   if len < 4 then
-    Ok { metadata = Metadata.empty; masked_markdown = text }
+    Ok ({ frontmatter = None; masked_markdown = text }, [])
   else if not (text.[0] = '-' && text.[1] = '-' && text.[2] = '-') then
-    Ok { metadata = Metadata.empty; masked_markdown = text }
+    Ok ({ frontmatter = None; masked_markdown = text }, [])
   else
     let after_dash =
       if len > 3 && text.[3] = '\r' && len > 4 && text.[4] = '\n' then 5
@@ -97,21 +108,35 @@ let parse source =
       else 0
     in
     if after_dash = 0 then
-      Ok { metadata = Metadata.empty; masked_markdown = text }
+      Ok ({ frontmatter = None; masked_markdown = text }, [])
     else
-      (* Scan for closing --- on its own line (unindented).
-         Use the LAST such line as the closing delimiter so that
-         internal --- YAML document separators are included in the
-         YAML content and can be detected as multi-document errors. *)
-      let rec find_last_closing i last =
-        if i >= len then last
-        else if text.[i] = '-' && i + 2 < len
-                && text.[i+1] = '-' && text.[i+2] = '-'
-                && (i = 0 || text.[i-1] = '\n')
-        then find_last_closing (i + 1) (Some i)
-        else find_last_closing (i + 1) last
+      (* Scan for the closing `---`: the FIRST line after the opening that is
+         exactly three dashes, unindented, with nothing after them but
+         whitespace. Front matter ends at the first fence in Obsidian, Jekyll,
+         Hugo and pandoc alike, and taking any later one would swallow the
+         `---` a note writes as a thematic break — the highest-blast-radius
+         single character in the language, since the whole body would then be
+         read as YAML. A later `---` is now an ordinary thematic break. *)
+      let line_is_fence i =
+        (i = 0 || text.[i - 1] = '\n')
+        && i + 2 < len
+        && text.[i] = '-' && text.[i + 1] = '-' && text.[i + 2] = '-'
+        && (let rec only_blanks j =
+              if j >= len then true
+              else
+                match text.[j] with
+                | ' ' | '\t' | '\r' -> only_blanks (j + 1)
+                | '\n' -> true
+                | _ -> false
+            in
+            only_blanks (i + 3))
       in
-      match find_last_closing after_dash None with
+      let rec find_first_closing i =
+        if i >= len then None
+        else if line_is_fence i then Some i
+        else find_first_closing (i + 1)
+      in
+      match find_first_closing after_dash with
       | None ->
         let diag =
           Diagnostic.make TM002
@@ -161,55 +186,103 @@ let parse source =
               (Span.Source_span { Span.path; start_byte = yaml_start; end_byte = yaml_start + String.length yaml_content })
               ("YAML parse error: " ^ msg)
           in
-          Error [diag]
-        | Ok yaml_parser ->
+          Error [diag]        | Ok yaml_parser ->
           let open Yaml.Stream in
           let diags = ref [] in
-          let seen_keys = ref [] in
-          let metadata = ref Metadata.empty in
-          let current_key = ref None in
-          let nesting = ref 0 in
-          let in_authors = ref false in
-          let in_contributors = ref false in
-          let in_tags = ref false in
-          let in_meta_key = ref false in
-          let temp_meta_key = ref None in
-          (* A promoted key is both the meta name and a span we must report on,
-             so the key scalar has to outlive the switch to its value. *)
-          let current_key_loc = ref None in
-          let temp_list = ref [] in
           let doc_count = ref 0 in
           let finished = ref false in
 
+          let span_of start_mark end_mark =
+            (make_located source yaml_source yaml_start ""
+               ~start_mark ~end_mark).Metadata.span
+          in
           let emit_diag code msg start_mark end_mark =
-            let loc =
-              make_located source yaml_source yaml_start ""
-                ~start_mark ~end_mark
-            in
-            diags := Diagnostic.make code (Span.Source_span loc.span) msg :: !diags
+            diags :=
+              Diagnostic.make code
+                (Span.Source_span (span_of start_mark end_mark)) msg
+              :: !diags
+          in
+          let reject_decoration anchor tag start_mark end_mark =
+            (match reject_anchor anchor start_mark end_mark source yaml_source
+                     yaml_start with
+             | Some d -> diags := d :: !diags
+             | None -> ());
+            match reject_tag tag start_mark end_mark source yaml_source
+                    yaml_start with
+            | Some d -> diags := d :: !diags
+            | None -> ()
           in
 
-          (* One meta name may be set once, whether it was written at the top
-             level or under `meta:`. *)
-          let add_meta (located_key : string Metadata.located) located_val
-              start_mark end_mark =
-            let name = located_key.Metadata.value in
-            let clashes ((k : string Metadata.located), _) =
-              k.Metadata.value = name
-            in
-            if List.exists clashes !metadata.meta then
-              emit_diag TM101 ("duplicate meta key: \"" ^ name ^ "\"")
-                start_mark end_mark
-            else
-              metadata :=
-                { !metadata with meta = (located_key, located_val) :: !metadata.meta }
+          (* The events arrive as a stream, so the tree is assembled with an
+             explicit stack. A mapping frame remembers the key it is waiting
+             for a value for; everything else is append-and-pop. *)
+          let stack = ref [] in
+          let root = ref None in
+
+          let place ?text (node : Yaml_json.t) ~start_mark ~end_mark =
+            match !stack with
+            | [] -> if !root = None then root := Some node
+            | Sequence frame :: _ -> frame.items <- node :: frame.items
+            | Mapping frame :: _ -> (
+              match frame.pending with
+              | None -> (
+                match text with
+                | None ->
+                  emit_diag TM101 "non-scalar mapping key is not allowed"
+                    start_mark end_mark
+                | Some name ->
+                  if
+                    List.exists
+                      (fun (f : Yaml_json.field) -> String.equal f.Yaml_json.name name)
+                      frame.entries
+                  then
+                    emit_diag TM101
+                      ("duplicate front matter key: \"" ^ name ^ "\"")
+                      start_mark end_mark;
+                  frame.pending <- Some (name, node.Yaml_json.span))
+              | Some (name, name_span) ->
+                frame.pending <- None;
+                frame.entries <-
+                  { Yaml_json.name; name_span; value = node } :: frame.entries)
+          in
+
+          let close_container build ~end_mark =
+            match !stack with
+            | Mapping frame :: rest when build = `Mapping ->
+              stack := rest;
+              (* A key whose value the document never supplied is null, which
+                 is what YAML itself means by `a:` with nothing after it. *)
+              (match frame.pending with
+               | Some (name, name_span) ->
+                 frame.entries <-
+                   { Yaml_json.name; name_span;
+                     value = { Yaml_json.value = Yaml_json.Null; text = None;
+                               span = name_span } }
+                   :: frame.entries
+               | None -> ());
+              let span = span_of frame.start end_mark in
+              place
+                { Yaml_json.value = Yaml_json.Assoc (List.rev frame.entries);
+                  text = None; span }
+                ~start_mark:frame.start ~end_mark
+            | Sequence frame :: rest when build = `Sequence ->
+              stack := rest;
+              let span = span_of frame.start end_mark in
+              place
+                { Yaml_json.value = Yaml_json.List (List.rev frame.items);
+                  text = None; span }
+                ~start_mark:frame.start ~end_mark
+            | _ ->
+              emit_diag TM002 "unbalanced YAML document" end_mark end_mark
           in
 
           while not !finished do
             begin match do_parse yaml_parser with
             | Error (`Msg msg) ->
               diags := Diagnostic.make TM002
-                (Span.Source_span { Span.path; start_byte = yaml_start; end_byte = yaml_start + String.length yaml_content })
+                (Span.Source_span
+                   { Span.path; start_byte = yaml_start;
+                     end_byte = yaml_start + String.length yaml_content })
                 ("YAML parse error: " ^ msg) :: !diags;
               finished := true
             | Ok (event, pos) ->
@@ -223,248 +296,60 @@ let parse source =
                | Document_end _ -> ()
                | Stream_end ->
                  if !doc_count = 0 then
-                   emit_diag TM002 "empty YAML document" pos.start_mark pos.end_mark;
+                   emit_diag TM002 "empty YAML document"
+                     pos.start_mark pos.end_mark;
                  finished := true
                | Mapping_start { anchor; tag; _ } ->
-                 if !current_key = None && !nesting >= 1 then
-                   emit_diag TM101 "non-scalar mapping key is not allowed"
-                     pos.start_mark pos.end_mark;
-                 begin match reject_anchor anchor pos.start_mark pos.end_mark source yaml_source yaml_start with
-                  | Some d -> diags := d :: !diags
-                  | None -> ()
-                 end;
-                 begin match reject_tag tag pos.start_mark pos.end_mark source yaml_source yaml_start with
-                  | Some d -> diags := d :: !diags
-                  | None -> ()
-                 end;
-                 incr nesting
-               | Mapping_end ->
-                 decr nesting;
-                 if !current_key = Some "meta" then current_key := None;
-                 if !in_meta_key then begin
-                   in_meta_key := false;
-                   temp_meta_key := None
-                 end
+                 reject_decoration anchor tag pos.start_mark pos.end_mark;
+                 stack :=
+                   Mapping { entries = []; pending = None; start = pos.start_mark }
+                   :: !stack
+               | Mapping_end -> close_container `Mapping ~end_mark:pos.end_mark
                | Sequence_start { anchor; tag; _ } ->
-                 if !current_key = None && !nesting >= 1 then
-                   emit_diag TM101 "non-scalar sequence key is not allowed"
-                     pos.start_mark pos.end_mark;
-                 begin match reject_anchor anchor pos.start_mark pos.end_mark source yaml_source yaml_start with
-                  | Some d -> diags := d :: !diags
-                  | None -> ()
-                 end;
-                 begin match reject_tag tag pos.start_mark pos.end_mark source yaml_source yaml_start with
-                  | Some d -> diags := d :: !diags
-                  | None -> ()
-                 end
-               | Sequence_end ->
-                 begin match !current_key with
-                  | Some "authors" ->
-                    metadata := { !metadata with authors = List.rev !temp_list };
-                    temp_list := [];
-                    in_authors := false;
-                    current_key := None
-                  | Some "contributors" ->
-                    metadata := { !metadata with contributors = List.rev !temp_list };
-                    temp_list := [];
-                    in_contributors := false;
-                    current_key := None
-                  | Some "tags" ->
-                    let tags = List.rev !temp_list in
-                    let string_tags = List.map (fun (a : Metadata.attribution) ->
-                      match a with
-                      | Literal lloc -> lloc
-                      | Tree tloc -> { Metadata.value = tloc.Metadata.value; span = tloc.Metadata.span }
-                    ) tags in
-                    metadata := { !metadata with tags = string_tags };
-                    temp_list := [];
-                    in_tags := false;
-                    current_key := None
-                  | _ -> temp_list := [];
-                    current_key := None
-                 end
+                 reject_decoration anchor tag pos.start_mark pos.end_mark;
+                 stack :=
+                   Sequence { items = []; start = pos.start_mark } :: !stack
+               | Sequence_end -> close_container `Sequence ~end_mark:pos.end_mark
+               | Nothing -> ()
                | Alias _ ->
                  emit_diag TM101 "YAML aliases are not allowed"
                    pos.start_mark pos.end_mark
                | Scalar scalar ->
-                 let anchor_reject = reject_anchor scalar.Yaml.anchor pos.start_mark pos.end_mark source yaml_source yaml_start in
-                 let tag_reject = reject_tag scalar.Yaml.tag pos.start_mark pos.end_mark source yaml_source yaml_start in
-                 begin match anchor_reject with Some d -> diags := d :: !diags | None -> () end;
-                 begin match tag_reject with Some d -> diags := d :: !diags | None -> () end;
-                 begin match !current_key with
-                  | None ->
-                    (* This scalar is a key *)
-                    let key = scalar.Yaml.value in
-                    if !nesting = 1 && not (List.mem key all_known_keys) then
-                      emit_diag TM101 ("unknown front matter key: \"" ^ key ^ "\"")
-                        pos.start_mark pos.end_mark;
-                    if !nesting = 1 && List.mem key !seen_keys then
-                      emit_diag TM101 ("duplicate front matter key: \"" ^ key ^ "\"")
-                        pos.start_mark pos.end_mark;
-                    if !nesting = 1 then begin
-                      seen_keys := key :: !seen_keys;
-                      current_key_loc :=
-                        Some (make_located source yaml_source yaml_start key
-                                ~start_mark:pos.start_mark ~end_mark:pos.end_mark)
-                    end;
-                    current_key := Some key
-                  | Some key ->
-                    (* This scalar is a value *)
-                    begin match key with
-                     | "date" ->
-                       let date_str = scalar.Yaml.value in
-                       if Metadata.valid_date date_str then
-                         let located =
-                           make_located source yaml_source yaml_start date_str
-                             ~start_mark:pos.start_mark ~end_mark:pos.end_mark
-                         in
-                         metadata := { !metadata with date = Some located }
-                       else
-                         emit_diag TM101 ("invalid date: \"" ^ date_str ^ "\"")
-                           pos.start_mark pos.end_mark;
-                       current_key := None
-                     | "id" ->
-                       (* The tree's identity. Stated here rather than taken
-                          from the file name so that the file can be renamed —
-                          retitled, translated — without moving the address the
-                          published site and every reference use. *)
-                       let id_str = scalar.Yaml.value in
-                       if Metadata.valid_id id_str then
-                         let located =
-                           make_located source yaml_source yaml_start id_str
-                             ~start_mark:pos.start_mark ~end_mark:pos.end_mark
-                         in
-                         metadata := { !metadata with id = Some located }
-                       else
-                         emit_diag TM101 ("invalid id: \"" ^ id_str ^ "\"")
-                           pos.start_mark pos.end_mark;
-                       current_key := None
-                     | "taxon" ->
-                       let located =
-                         make_located source yaml_source yaml_start scalar.Yaml.value
-                           ~start_mark:pos.start_mark ~end_mark:pos.end_mark
-                       in
-                       metadata := { !metadata with taxon = Some located };
-                       current_key := None
-                     | "authors" ->
-                       let located =
-                         make_located source yaml_source yaml_start scalar.Yaml.value
-                           ~start_mark:pos.start_mark ~end_mark:pos.end_mark
-                       in
-                       begin match Metadata.parse_attribution located with
-                        | Ok attr ->
-                          if !in_authors then
-                            temp_list := attr :: !temp_list
-                          else begin
-                            in_authors := true;
-                            temp_list := [attr]
-                          end
-                        | Error d ->
-                          diags := d :: !diags
-                       end
-                     | "contributors" ->
-                       let located =
-                         make_located source yaml_source yaml_start scalar.Yaml.value
-                           ~start_mark:pos.start_mark ~end_mark:pos.end_mark
-                       in
-                       begin match Metadata.parse_attribution located with
-                        | Ok attr ->
-                          if !in_contributors then
-                            temp_list := attr :: !temp_list
-                          else begin
-                            in_contributors := true;
-                            temp_list := [attr]
-                          end
-                        | Error d ->
-                          diags := d :: !diags
-                       end
-                     | "tags" ->
-                       let located =
-                         make_located source yaml_source yaml_start scalar.Yaml.value
-                           ~start_mark:pos.start_mark ~end_mark:pos.end_mark
-                       in
-                       if !in_tags then
-                         temp_list := Metadata.Literal located :: !temp_list
-                       else begin
-                         in_tags := true;
-                         temp_list := [Metadata.Literal located]
-                       end
-                     | "meta" ->
-                       if !in_meta_key then begin
-                         (* This is the value for a meta key *)
-                         let located_val =
-                           make_located source yaml_source yaml_start scalar.Yaml.value
-                             ~start_mark:pos.start_mark ~end_mark:pos.end_mark
-                         in
-                         begin match !temp_meta_key with
-                          | Some located_key ->
-                            add_meta located_key located_val
-                              pos.start_mark pos.end_mark;
-                            temp_meta_key := None;
-                            in_meta_key := false
-                          | None -> ()
-                         end
-                       end else begin
-                         (* This is a key inside meta mapping *)
-                         let located_key =
-                           make_located source yaml_source yaml_start scalar.Yaml.value
-                             ~start_mark:pos.start_mark ~end_mark:pos.end_mark
-                         in
-                         in_meta_key := true;
-                         temp_meta_key := Some located_key
-                       end
-                     | k when !nesting = 1 && List.mem k promoted_meta_keys ->
-                       (* A top-level meta name: same destination as an entry
-                          written under `meta:`, keyed by the scalar itself. *)
-                       let located_val =
-                         make_located source yaml_source yaml_start scalar.Yaml.value
-                           ~start_mark:pos.start_mark ~end_mark:pos.end_mark
-                       in
-                       begin match !current_key_loc with
-                        | Some located_key ->
-                          add_meta located_key located_val
-                            pos.start_mark pos.end_mark
-                        | None -> ()
-                       end;
-                       current_key_loc := None;
-                       current_key := None
-                     | _ ->
-                       if !in_authors then begin
-                         let located =
-                           make_located source yaml_source yaml_start scalar.Yaml.value
-                             ~start_mark:pos.start_mark ~end_mark:pos.end_mark
-                         in
-                         begin match Metadata.parse_attribution located with
-                          | Ok attr -> temp_list := attr :: !temp_list
-                          | Error d -> diags := d :: !diags
-                         end
-                       end else if !in_contributors then begin
-                         let located =
-                           make_located source yaml_source yaml_start scalar.Yaml.value
-                             ~start_mark:pos.start_mark ~end_mark:pos.end_mark
-                         in
-                         begin match Metadata.parse_attribution located with
-                          | Ok attr -> temp_list := attr :: !temp_list
-                          | Error d -> diags := d :: !diags
-                         end
-                       end else if !in_tags then begin
-                         let located =
-                           make_located source yaml_source yaml_start scalar.Yaml.value
-                             ~start_mark:pos.start_mark ~end_mark:pos.end_mark
-                         in
-                         temp_list := Metadata.Literal located :: !temp_list
-                       end else
-                         current_key := None
-                    end
-                 end
-               | Nothing -> ()
+                 reject_decoration scalar.Yaml.anchor scalar.Yaml.tag
+                   pos.start_mark pos.end_mark;
+                 let span = span_of pos.start_mark pos.end_mark in
+                 (* Only a plain scalar is resolved by YAML's core schema; a
+                    quoted one is a string whatever it looks like. *)
+                 let value =
+                   if scalar.Yaml.style = `Plain && scalar.Yaml.plain_implicit
+                   then
+                     match Yaml_json.of_plain_scalar scalar.Yaml.value with
+                     | Ok value -> value
+                     | Error message ->
+                       emit_diag TM002 message pos.start_mark pos.end_mark;
+                       Yaml_json.String scalar.Yaml.value
+                   else Yaml_json.String scalar.Yaml.value
+                 in
+                 place ~text:scalar.Yaml.value
+                   { Yaml_json.value; text = Some scalar.Yaml.value; span }
+                   ~start_mark:pos.start_mark ~end_mark:pos.end_mark
               end
             end
           done;
 
-          let diag_list = List.rev !diags in
-          if diag_list <> [] then
-            Error diag_list
-          else
-            let meta_rev = List.rev !metadata.meta in
-            Ok { metadata = { !metadata with meta = meta_rev }; masked_markdown = masked_str }
+          (* mdbase v0.3 §03: front matter must parse to a mapping. *)
+          let frontmatter =
+            match !root with
+            | None -> None
+            | Some ({ Yaml_json.value = Yaml_json.Assoc _; _ } as node) -> Some node
+            | Some node ->
+              diags :=
+                Diagnostic.make TM002 (Span.Source_span node.Yaml_json.span)
+                  ("front matter must be a mapping, but this is "
+                   ^ Yaml_json.describe node.Yaml_json.value)
+                :: !diags;
+              None
+          in
+          Diagnostic.gate
+            { frontmatter; masked_markdown = masked_str }
+            (List.rev !diags)

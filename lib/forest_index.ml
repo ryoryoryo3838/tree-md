@@ -8,13 +8,23 @@ type definition = {
   location : Span.location;
 }
 
+(* One source file, as something a reference can name. [source] is its
+   absolute path, [dir] the directory holding it, and [id] the tree it is. *)
+type filed = { source : string; dir : string; id : string }
+
 type t = {
   by_id : definition StringMap.t;
   (* An editor addresses notes by file name, so a reference written the way
      Obsidian writes it names the file rather than the tree. Held apart from
      the identities, and consulted only after them, so that an id always wins
-     over a file that happens to be called the same thing. *)
-  by_filename : string StringMap.t;
+     over a file that happens to be called the same thing.
+
+     A stem can name more than one file — two folders may each hold a
+     note.tree.md — so this maps to every candidate and resolution picks. *)
+  by_filename : filed list StringMap.t;
+  (* Every source, for `[[folder/note]]`: a wikilink containing a separator is
+     resolved path-style rather than by stem. *)
+  all_files : filed list;
 }
 
 (* ── Location ordering (path, rank, byte), mirroring Diagnostic.compare ── *)
@@ -100,7 +110,7 @@ let handwritten_definitions (handwritten : Discovery.handwritten_root list)
         location = Span.Path root.Discovery.path })
     handwritten
 
-let build ~handwritten ~generated =
+let assemble ~tolerant ~handwritten ~generated =
   let all =
     handwritten_definitions handwritten
     @ List.concat_map generated_definitions generated
@@ -131,21 +141,64 @@ let build ~handwritten ~generated =
           Diagnostic.make ~secondary TM201 first.location
             ("duplicate identity \"" ^ id ^ "\"")
         in
+        (* A tolerant index keeps the first definition so that the pass which
+           only needs to know where a reference lands can still run. Two
+           private notes sharing an address must not stop the site from
+           working out what is public. *)
+        let index = if tolerant then StringMap.add id first index else index in
         (diagnostic :: diags, index)
       | [] -> (diags, index)
     ) grouped ([], StringMap.empty)
+  in
+  let all_files =
+    List.filter_map
+      (fun (doc : Parsed_document.t) ->
+        let outline = doc.Parsed_document.outline in
+        let source = outline.Outline.span.Span.path in
+        match source_stem (Span.Source_span outline.Outline.span) with
+        | Some _ ->
+          let dir =
+            match String.rindex_opt source '/' with
+            | None -> ""
+            | Some i -> String.sub source 0 i
+          in
+          Some { source; dir; id = outline.Outline.root_id }
+        | None -> None)
+      generated
   in
   let by_filename =
     List.fold_left
       (fun table (doc : Parsed_document.t) ->
         let outline = doc.Parsed_document.outline in
+        let source = outline.Outline.span.Span.path in
         match source_stem (Span.Source_span outline.Outline.span) with
-        | Some stem -> StringMap.add stem outline.Outline.root_id table
-        | None -> table)
+        | None -> table
+        | Some stem ->
+          let entry =
+            List.find_opt (fun f -> f.source = source) all_files
+          in
+          (match entry with
+           | None -> table
+           | Some entry ->
+             let existing =
+               Option.value ~default:[] (StringMap.find_opt stem table)
+             in
+             StringMap.add stem (entry :: existing) table))
       StringMap.empty generated
   in
-  if diags = [] then Ok { by_id = index; by_filename }
+  if tolerant || diags = [] then Ok { by_id = index; by_filename; all_files }
   else Error (List.sort Diagnostic.compare diags)
+
+let build ~handwritten ~generated =
+  assemble ~tolerant:false ~handwritten ~generated
+
+(* An index that keeps going when two trees share an identity. Only the pass
+   that works out which trees are published uses it: that pass runs before
+   anything is reported, and two notes nobody publishes must not stop it. *)
+let build_tolerant ~handwritten ~generated =
+  match assemble ~tolerant:true ~handwritten ~generated with
+  | Ok index -> index
+  | Error _ -> { by_id = StringMap.empty; by_filename = StringMap.empty; all_files = [] }
 
 (* ── resolve: reference and asset validation per document ── *)
 
@@ -153,6 +206,7 @@ let reference_kind_message = function
   | Ir.Wiki -> "wiki link"
   | Ir.Embed -> "embed"
   | Ir.Attribution -> "attribution"
+  | Ir.Markdown_link -> "link"
 
 let tree_suffix = ".tree"
 
@@ -164,52 +218,200 @@ let strip_tree_suffix target =
   else
     None
 
-(* Three spellings reach the same tree, tried in this order.
+let md_suffix = ".md"
 
-   An identity always wins. Then the `.tree` suffix an editor sees on
-   `foo.tree.md` and writes as `[[foo.tree]]`. Then the bare file name, because
-   a tree that states its own `id` is no longer called after its file, and
-   `[[the-file-name]]` is what Obsidian writes and autocompletes — the file
-   name stays the search key even once it has stopped being the address.
-
-   Ordering is what keeps this unambiguous: a tree whose identity really is
-   `foo.tree`, or one whose id collides with another file's name, still wins. *)
-let resolve_target index target =
-  let by_id = index.by_id in
-  if StringMap.mem target by_id then Some target
+let strip_suffix suffix target =
+  let n = String.length target in
+  let s = String.length suffix in
+  if n > s && String.sub target (n - s) s = suffix then
+    Some (String.sub target 0 (n - s))
   else
-    let stripped =
-      match strip_tree_suffix target with
-      | Some stripped when StringMap.mem stripped by_id -> Some stripped
-      | Some _ | None -> None
+    None
+
+let strip_tree_suffix target = strip_suffix tree_suffix target
+
+(* The spellings one target may be written as, most exact first.
+
+   An editor shows `foo.tree.md` as `foo.tree` and writes `[[foo.tree]]`, and
+   sometimes writes the whole file name. Stripping is cumulative so
+   `[[foo.tree.md]]`, `[[foo.tree]]` and `[[foo]]` all reach `foo`. The
+   written spelling is always tried before any stripped one, so a tree whose
+   identity genuinely is `foo.tree` is never shadowed. *)
+let spellings target =
+  let add value acc = if List.mem value acc then acc else acc @ [ value ] in
+  let acc = [ target ] in
+  let acc =
+    match strip_suffix md_suffix target with
+    | None -> acc
+    | Some without_md -> (
+      let acc = add without_md acc in
+      match strip_tree_suffix without_md with
+      | None -> acc
+      | Some bare -> add bare acc)
+  in
+  match strip_tree_suffix target with
+  | None -> acc
+  | Some bare -> add bare acc
+
+let dirname path =
+  match String.rindex_opt path '/' with
+  | None -> ""
+  | Some i -> String.sub path 0 i
+
+(* A stem may name several files. mdbase v0.3 §08 fixes the order to try:
+   the referring file's own folder first, then the shortest path, then
+   alphabetical — so the answer does not depend on filesystem order. *)
+let pick_file ~from candidates =
+  match candidates with
+  | [] -> None
+  | [ only ] -> Some (only, false)
+  | many ->
+    let here = dirname from in
+    let same_folder = List.filter (fun f -> f.dir = here) many in
+    let pool, settled_by_folder =
+      match same_folder with
+      | [ one ] -> ([ one ], true)
+      | [] -> (many, false)
+      | several -> (several, false)
     in
-    match stripped with
-    | Some _ -> stripped
-    | None -> (
-      let named = StringMap.find_opt target index.by_filename in
-      match named with
-      | Some id when StringMap.mem id by_id -> Some id
-      | Some _ | None -> (
-        (* `[[foo.tree]]` where `foo.tree.md` states a different id. *)
-        match strip_tree_suffix target with
-        | None -> None
-        | Some stem -> (
-          match StringMap.find_opt stem index.by_filename with
-          | Some id when StringMap.mem id by_id -> Some id
-          | Some _ | None -> None)))
+    let ordered =
+      List.sort
+        (fun a b ->
+          let by_length =
+            Int.compare (String.length a.source) (String.length b.source)
+          in
+          if by_length <> 0 then by_length
+          else String.compare a.source b.source)
+        pool
+    in
+    (match ordered with
+     | best :: _ -> Some (best, not settled_by_folder)
+     | [] -> None)
+
+(* Identity first, then file name, then path. An identity always wins: a tree
+   that states its own `id` is no longer called after its file, but
+   `[[the-file-name]]` is still what Obsidian writes and autocompletes, so the
+   file name stays the search key. Returns the resolved identity and whether
+   more than one file answered to the name. *)
+let resolve_target index ~from target =
+  let by_id = index.by_id in
+  let candidates = spellings target in
+  let as_identity =
+    List.find_opt (fun spelling -> StringMap.mem spelling by_id) candidates
+  in
+  match as_identity with
+  | Some id -> Some (id, false)
+  | None ->
+    let by_name =
+      List.find_map
+        (fun spelling ->
+          match StringMap.find_opt spelling index.by_filename with
+          | None | Some [] -> None
+          | Some files -> pick_file ~from files)
+        candidates
+    in
+    (match by_name with
+     | Some (file, ambiguous) when StringMap.mem file.id by_id ->
+       Some (file.id, ambiguous)
+     | Some _ -> None
+     | None ->
+       (* `[[folder/note]]`: a target carrying a separator names a path. *)
+       if not (String.contains target '/') then None
+       else
+         (* A written path may be relative to the referring file, so leading
+            `./` and `../` are dropped before matching by suffix. *)
+         let rec strip_relative value =
+           if String.length value >= 2 && String.sub value 0 2 = "./" then
+             strip_relative (String.sub value 2 (String.length value - 2))
+           else if String.length value >= 3 && String.sub value 0 3 = "../" then
+             strip_relative (String.sub value 3 (String.length value - 3))
+           else value
+         in
+         let matches spelling file =
+           let suffix = "/" ^ strip_relative spelling ^ ".tree.md" in
+           let n = String.length file.source and s = String.length suffix in
+           n > s && String.sub file.source (n - s) s = suffix
+         in
+         let by_path =
+           List.find_map
+             (fun spelling ->
+               match List.filter (matches spelling) index.all_files with
+               | [] -> None
+               | files -> pick_file ~from files)
+             candidates
+         in
+         (match by_path with
+          | Some (file, ambiguous) when StringMap.mem file.id by_id ->
+            Some (file.id, ambiguous)
+          | Some _ | None -> None))
+
+(* The identity a reference lands on, without asking which file owns it: when
+   two trees share an address the owner is exactly what is not yet settled, and
+   the pass that walks the reference graph must pull in both so that the
+   duplicate is reported rather than silently picked between. *)
+let resolve_reference index ~from target =
+  match resolve_target index ~from target with
+  | None -> None
+  | Some (id, _ambiguous) -> Some id
+
+(* The file a name would land in if the index has not heard of it: an editor
+   writes file names, and a source that failed to parse contributes no
+   identity, so without this a note that is broken looks merely absent. *)
+let source_of_filename sources target =
+  let candidates = spellings target in
+  List.find_map
+    (fun spelling ->
+      List.find_opt
+        (fun (record : Discovery.source_file) ->
+          String.equal record.Discovery.filename spelling
+          || String.equal
+               (Path_safe.to_string record.Discovery.source_relative)
+               (spelling ^ ".tree.md"))
+        sources
+      |> Option.map (fun (record : Discovery.source_file) -> record.Discovery.path))
+    candidates
 
 let check_references index (doc : Parsed_document.t) (diags, resolution) =
+  let from = doc.Parsed_document.outline.Outline.span.Span.path in
   List.fold_left (fun (diags, resolution) (reference : Ir.reference) ->
-    match resolve_target index reference.target with
-    | Some id when String.equal id reference.target -> (diags, resolution)
-    | Some id ->
-      (diags, Resolution.add_tree reference.span ~id resolution)
-    | None ->
+    (* Picking one of several files with the same name is a decision the
+       writer did not make, so it is said out loud rather than assumed. *)
+    let ambiguity_warning ambiguous =
+      if not ambiguous then []
+      else
+        [ Diagnostic.warn TM202 (Span.Source_span reference.span)
+            ("\"" ^ reference.target
+             ^ "\" names more than one file; resolved by mdbase link order \
+                (nearest folder, then shortest path). Give the tree an `id:` \
+                and reference that to say which one you mean") ]
+    in
+    match resolve_target index ~from reference.target with
+    | Some (id, ambiguous) when String.equal id reference.target ->
+      (ambiguity_warning ambiguous @ diags, resolution)
+    | Some (id, ambiguous) ->
+      (ambiguity_warning ambiguous @ diags,
+       Resolution.add_tree reference.span ~id resolution)
+    | None -> (
       let kind = reference_kind_message reference.kind in
-      (Diagnostic.make TM202 (Span.Source_span reference.span)
-         ("unresolved " ^ kind ^ " \"" ^ reference.target ^ "\"")
-       :: diags,
-       resolution)
+      match reference.kind with
+      | Ir.Markdown_link ->
+        (* Only a wiki link is closed-world. A Markdown link was never checked
+           at all before, and a local destination may be a relative URL to
+           something the forest does not own, so one that does not resolve is
+           left exactly as written. A destination ending in `.md` can only have
+           meant a note, so that one is said out loud. *)
+        if strip_suffix md_suffix reference.target = None then (diags, resolution)
+        else
+          (Diagnostic.warn TM202 (Span.Source_span reference.span)
+             ("unresolved " ^ kind ^ " \"" ^ reference.target
+              ^ "\"; it is emitted as written, which names no tree")
+           :: diags,
+           resolution)
+      | Ir.Wiki | Ir.Embed | Ir.Attribution ->
+        (Diagnostic.make TM202 (Span.Source_span reference.span)
+           ("unresolved " ^ kind ^ " \"" ^ reference.target ^ "\"")
+         :: diags,
+         resolution))
   ) (diags, resolution) doc.Parsed_document.references
 
 let has_hidden_component path =
@@ -249,7 +451,41 @@ let resolve_asset_root ~root_abs relative =
   | { Unix.st_kind = _; _ } -> Asset_missing
   | exception Unix.Unix_error _ -> Asset_missing
 
-let check_asset forest (diags, resolution)
+(* Obsidian embeds an attachment by its file name, wherever it lives in the
+   vault: `![[diagram.png]]`, not `![[assets/images/diagram.png]]`. A name that
+   carries no separator is therefore searched for under the asset roots. Built
+   once per resolve, because it walks them. *)
+let attachments_by_name (forest : Config.forest) =
+  let table = Hashtbl.create 64 in
+  let rec walk ~rel_root ~root_abs ~rel_dir =
+    let dir = if rel_dir = "" then root_abs else Filename.concat root_abs rel_dir in
+    match Sys.readdir dir with
+    | exception Sys_error _ -> ()
+    | entries ->
+      Array.sort String.compare entries;
+      Array.iter
+        (fun name ->
+          if String.length name > 0 && name.[0] <> '.' then
+            let rel = if rel_dir = "" then name else rel_dir ^ "/" ^ name in
+            let path = Filename.concat root_abs rel in
+            match Unix.lstat path with
+            | { Unix.st_kind = Unix.S_DIR; _ } -> walk ~rel_root ~root_abs ~rel_dir:rel
+            | { Unix.st_kind = Unix.S_REG; _ } ->
+              let existing = Option.value ~default:[] (Hashtbl.find_opt table name) in
+              Hashtbl.replace table name (existing @ [ (rel_root, rel) ])
+            (* A symlink is skipped here for the same reason resolve_asset_root
+               refuses one: it can leave the root. *)
+            | _ -> ()
+            | exception Unix.Unix_error _ -> ())
+        entries
+  in
+  List.iter
+    (fun (rel_root, root_abs) ->
+      walk ~rel_root:(Path_safe.to_string rel_root) ~root_abs ~rel_dir:"")
+    forest.Config.asset_roots;
+  table
+
+let check_asset forest ~attachments (diags, resolution)
     (asset : Parsed_document.local_asset) =
   let destination = asset.destination in
   let location = Span.Source_span asset.span in
@@ -280,6 +516,22 @@ let check_asset forest (diags, resolution)
          :: diags, resolution)
       else
         match List.rev matches with
+        | [] when not (String.contains destination '/') -> (
+          (* A bare file name is what Obsidian writes for an attachment. *)
+          match Hashtbl.find_opt (Lazy.force attachments) destination with
+          | Some [ (rel_root, relative_path) ] ->
+            let routed = rel_root ^ "/" ^ relative_path in
+            (diags, Resolution.add_asset asset.span ~routed_path:routed resolution)
+          | Some (_ :: _ :: _ as found) ->
+            (Diagnostic.make TM204 location
+               ("ambiguous asset \"" ^ destination ^ "\" (matches "
+                ^ string_of_int (List.length found) ^ " files under the asset \
+                   roots); write the path to say which one you mean")
+             :: diags, resolution)
+          | Some [] | None ->
+            (Diagnostic.make TM203 location
+               ("missing asset \"" ^ destination ^ "\"")
+             :: diags, resolution))
         | [] ->
           (Diagnostic.make TM203 location
              ("missing asset \"" ^ destination ^ "\"")
@@ -293,19 +545,20 @@ let check_asset forest (diags, resolution)
               ^ "\" (matches multiple asset roots)")
            :: diags, resolution)
 
+(* Warnings ride along with the resolutions; only an error discards them. *)
 let resolve forest index ~documents =
+  let attachments = lazy (attachments_by_name forest) in
   let diags, results =
     List.fold_left (fun (diags, results) (doc : Parsed_document.t) ->
       let diags, resolution =
         check_references index doc (diags, Resolution.empty)
       in
       let diags, resolution =
-        List.fold_left (check_asset forest) (diags, resolution)
+        List.fold_left (check_asset forest ~attachments) (diags, resolution)
           doc.Parsed_document.local_assets
       in
       (diags,
        (doc.Parsed_document.outline.Outline.root_id, resolution) :: results)
     ) ([], []) documents
   in
-  if diags = [] then Ok (List.rev results)
-  else Error (List.sort Diagnostic.compare diags)
+  Diagnostic.gate (List.rev results) (List.sort Diagnostic.compare diags)

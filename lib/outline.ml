@@ -45,8 +45,8 @@ let zero_span path =
   match Span.make ~path ~start_byte:0 ~end_byte:0 with
   | Ok s -> s | Error _ -> failwith "cannot create zero span"
 
-let fallback_title path root_id =
-  { Ir.node = Ir.Text root_id; Ir.span = zero_span path }
+let fallback_title path filename =
+  { Ir.node = Ir.Text filename; Ir.span = zero_span path }
 
 let content_span = function
   | Block b -> b.Ir.bspan
@@ -90,7 +90,7 @@ let pop_while stack keep =
 let pop_sections_above stack n = pop_while stack (fun se -> se.se_level > n)
 let pop_sections_ge stack n = pop_while stack (fun se -> se.se_level >= n)
 
-let build ~root_id (doc : Ir.document) =
+let build ~root_id ~filename (doc : Ir.document) =
   let diags = ref [] in
   let root_title = ref None in
   let non_h1_content_seen = ref false in
@@ -177,6 +177,18 @@ let build ~root_id (doc : Ir.document) =
        | None -> ());
       pending_directive := Some (id, block.Ir.bspan)
 
+    (* The footnote section belongs to the note, not to whichever section
+       happened to be open when the document ran out, so every open subtree is
+       closed before it is placed. There may be none open, which is ordinary
+       rather than the error a written `<!-- /hN -->` would be. *)
+    | Ir.Footnotes _ ->
+      non_h1_content_seen := true;
+      drop_pending_directive block.Ir.bspan "non-heading block after subtree directive";
+      pop_sections_above stack 1;
+      (match !stack with
+       | se :: _ -> se.se_content_rev := Block block :: !(se.se_content_rev)
+       | [] -> ())
+
     | _ (* other blocks: Paragraph, Blockquote, List, Code_block, Thematic_break, Block_embed, Display_math *) ->
       non_h1_content_seen := true;
       drop_pending_directive block.Ir.bspan "non-heading block after subtree directive";
@@ -220,7 +232,7 @@ let build ~root_id (doc : Ir.document) =
 
   let final_title = match !root_title with
     | Some t -> t
-    | None -> [fallback_title doc_path root_id]
+    | None -> [fallback_title doc_path filename]
   in
 
   let tree = {
@@ -231,9 +243,7 @@ let build ~root_id (doc : Ir.document) =
     span = doc.Ir.doc_span;
   } in
 
-  match !diags with
-  | [] -> Ok tree
-  | ds -> Error (List.rev ds)
+  Diagnostic.gate tree (List.rev !diags)
 
 let definitions tree =
   let rec collect content acc =
