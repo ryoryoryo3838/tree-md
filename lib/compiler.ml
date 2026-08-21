@@ -602,6 +602,25 @@ let compile_forest ?(allow_pending = false) ?mdbase config discovery =
              not (Hashtbl.mem set record.Discovery.path))
            discovery.Discovery.sources)
   in
+  (* A `from` that names folders and reaches none of them is not a vault with
+     nothing public in it; it is a pattern written against a layout the sources
+     are not in — the sync copied them somewhere else, or the pattern carries a
+     prefix the source root already spends. Nothing being published is then a
+     silent success: no tree is emitted, every tree recorded before is deleted,
+     and the site is empty without a word said. So it is said here. *)
+  let publish_diags =
+    match published with
+    | Some set
+      when Hashtbl.length set = 0 && discovery.Discovery.sources <> [] ->
+      [ Diagnostic.warn TM401 (Span.Path config.Config.path)
+          (config.Config.path ^ ": publish.from matched none of the "
+           ^ string_of_int unpublished
+           ^ " sources, so nothing is published")
+          ~notes:
+            [ "its patterns are matched against the path of a source below \
+               its source root, with the root itself spent" ] ]
+    | Some _ | None -> []
+  in
   let records =
     List.filter
       (fun ((record : Discovery.source_file), _) ->
@@ -641,7 +660,8 @@ let compile_forest ?(allow_pending = false) ?mdbase config discovery =
   in
   let diagnostics =
     List.sort Diagnostic.compare
-      (mdbase_warnings @ parse_diags @ pending_diags @ stage_diags @ emit_diags)
+      (mdbase_warnings @ publish_diags @ parse_diags @ pending_diags
+       @ stage_diags @ emit_diags)
   in
   Diagnostic.gate
     ({ outputs = List.sort compare_expected expecteds; unpublished })

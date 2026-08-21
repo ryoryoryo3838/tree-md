@@ -265,3 +265,19 @@ Without the table every source is published, and the draft's broken link is a
      | [[存在しないノート]]
      | ^^^^^^^^^^^^
   [1]
+
+A `from` that reaches nothing is said out loud. Patterns are matched below the
+source root, with the root itself already spent, so one written against a
+layout the sources are not in selects nothing — and publishing nothing emits
+no tree and deletes every tree the build wrote before, which would otherwise
+look exactly like a build with nothing to do.
+
+  $ sed 's|^from = .*|from = ["MIYA-LIS.NET/**"]|' publish/tree-md.toml > publish/elsewhere.toml
+  $ tree-md build --config publish/elsewhere.toml
+  TM401: warning: $TESTCASE_ROOT/publish/elsewhere.toml: publish.from matched none of the 4 sources, so nothing is published
+    --> $TESTCASE_ROOT/publish/elsewhere.toml
+    note: its patterns are matched against the path of a source below its source root, with the root itself spent
+  build: 0 created, 0 replaced, 3 deleted, 0 unchanged, 4 unpublished
+  $ find publish/generated -name '*.tree' | sort
+  $ tree-md build --config publish/tree-md.toml
+  build: 3 created, 0 replaced, 0 deleted, 0 unchanged, 1 unpublished

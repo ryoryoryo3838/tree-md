@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decided by which path sorts first. Minting follows publication. Without the
   table every source is published, as before.
 
+  A `from` that matches no source at all is a `TM401` warning rather than a
+  silent success. Patterns are matched below the source root, with the root
+  itself already spent, so one written against a layout the sources are not in
+  selects nothing — and a build that publishes nothing emits no tree and
+  deletes every tree it wrote before, which otherwise looks exactly like a
+  build with nothing to do.
+
 - tree-md reads what a collection declares as an
   [mdbase](https://github.com/mdbase-dev/mdbase-spec) v0.3.0 collection.
   `mdbase.yaml` supplies `settings.validation` (the severity a schema

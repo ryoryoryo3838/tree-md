@@ -422,6 +422,50 @@ let test_published_entry_still_reports () =
            (fun d -> Diagnostic.code_string d.Diagnostic.code = "TM102")
            diagnostics))
 
+(* A `from` written against a layout the sources are not in reaches nothing,
+   and nothing reached is a build that succeeds by emitting no tree at all.
+   That is a warning rather than an error: it is still a legal thing to say,
+   and the build that says it should be readable as empty on purpose only
+   after somebody has been told it is empty. *)
+let test_publish_from_matching_nothing_is_said_out_loud () =
+  with_temp_dir (fun root ->
+    let discovery = publish_fixture root in
+    (* The sources were synced with the published folder spent, so the prefix
+       the pattern names is no longer part of any path. *)
+    let config = publishing_config ~root [ "MIYA-LIS.NET/**" ] in
+    match Compiler.compile_forest config discovery with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "an empty selection failed" diagnostics)
+    | Ok (forest, warnings) ->
+      Alcotest.(check int) "nothing is emitted" 0
+        (List.length forest.Compiler.outputs);
+      Alcotest.(check int) "everything is counted out" 4
+        forest.Compiler.unpublished;
+      Alcotest.(check bool) "TM401 names publish.from" true
+        (List.exists
+           (fun d ->
+             Diagnostic.code_string d.Diagnostic.code = "TM401"
+             && (not (Diagnostic.is_error d))
+             && contains d.Diagnostic.message "publish.from")
+           warnings))
+
+(* A source root with nothing in it publishes nothing either, and there is no
+   pattern to blame for that. *)
+let test_publish_from_says_nothing_about_an_empty_forest () =
+  with_temp_dir (fun root ->
+    let discovery = { Discovery.sources = []; handwritten_roots = [] } in
+    let config = publishing_config ~root [ "PUBLIC/**" ] in
+    match Compiler.compile_forest config discovery with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "an empty forest failed" diagnostics)
+    | Ok (_forest, warnings) ->
+      Alcotest.(check (list string)) "no TM401" []
+        (List.filter_map
+           (fun d ->
+             let code = Diagnostic.code_string d.Diagnostic.code in
+             if code = "TM401" then Some code else None)
+           warnings))
+
 (* Two trees may share an address without either being an entry. Reachability
    pulls in every owner of the address a reference lands on, so the collision
    is reported rather than silently decided by which path sorts first. *)
@@ -467,6 +511,10 @@ let () =
           test_unpublished_diagnostics_are_dropped;
         test_case "published_entry_still_reports" `Quick
           test_published_entry_still_reports;
+        test_case "publish_from_matching_nothing_is_said_out_loud" `Quick
+          test_publish_from_matching_nothing_is_said_out_loud;
+        test_case "publish_from_says_nothing_about_an_empty_forest" `Quick
+          test_publish_from_says_nothing_about_an_empty_forest;
         test_case "duplicate_identity_is_not_silently_picked" `Quick
           test_duplicate_identity_is_not_silently_picked;
         test_case "unaddressed_tree_allowed_before_minting" `Quick

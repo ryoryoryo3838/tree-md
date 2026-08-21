@@ -858,6 +858,20 @@ $ tree-md build
 build: 10 created, 0 replaced, 0 deleted, 0 unchanged, 34 unpublished
 ```
 
+A pattern list that reaches **nothing** is a warning rather than a silent
+success. Paths are matched below the source root, with the root itself already
+spent, so a `from` that repeats it — or that names a folder the sync flattened
+away — selects no source at all, and a build that publishes nothing emits no
+tree and deletes every tree it wrote before:
+
+```console
+$ tree-md build
+TM401: warning: /home/you/site/tree-md.toml: publish.from matched none of the 7 sources, so nothing is published
+  --> /home/you/site/tree-md.toml
+  note: its patterns are matched against the path of a source below its source root, with the root itself spent
+build: 0 created, 0 replaced, 7 deleted, 0 unchanged, 7 unpublished
+```
+
 Two things stay the writer's business rather than being quietly skipped. A
 source the pattern names is compiled even if it does not parse: you put it in
 a published folder. And when a reference lands on an address two trees share,
