@@ -838,6 +838,20 @@ $ tree-md build
 build: 10 created, 0 replaced, 0 deleted, 0 unchanged, 34 unpublished
 ```
 
+**1つも一致しなかったパターン列は黙って成功させず、警告します。** 照合されるのは
+ソースルートより下のパスで、ルート自体は既に消費されています。したがってルートを
+繰り返した `from` や、同期の過程で潰れてしまったフォルダを名指した `from` は
+どのソースも選ばず、何も公開しないビルドは tree を1つも出力せず、以前に書いた
+tree をすべて削除します。
+
+```console
+$ tree-md build
+TM401: warning: /home/you/site/tree-md.toml: publish.from matched none of the 7 sources, so nothing is published
+  --> /home/you/site/tree-md.toml
+  note: its patterns are matched against the path of a source below its source root, with the root itself spent
+build: 0 created, 0 replaced, 7 deleted, 0 unchanged, 7 unpublished
+```
+
 2つだけは黙って飛ばさず、書き手の責任として扱います。パターンが名指したソースは
 パースできなくてもコンパイル対象です（公開フォルダに置いたのは書き手だからです）。
 そして参照が「2つの tree が共有しているアドレス」に着地した場合は**両方**を引き込み、
