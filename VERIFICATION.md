@@ -228,6 +228,14 @@ plus the `test/fixtures/compat` fixture.
 | Ordinary links exempt from closed-world rule | `forest_index_test.ml` (`single_match_routes`) |
 | Multi-location diagnostics | `forest_index_test.ml` (`duplicate_subtree_orders_by_byte`); `diagnostic_test.ml` (`sort_by_path_then_byte`, `path_location_sorts_after_span`, `no_location_sorts_last`) |
 
+### Link cards
+
+| Requirement | Test |
+| --- | --- |
+| A `cardlink`/`embed` block is rendered as a classed anchor, with the metadata read from the note and never fetched | `block_test.ml` (`cards`); `forester_6_test.ml` (`cards`); `cli.t/run.t` (card in `publish/generated/PUBLIC/index.tree`) |
+| A card needs a `url`, its URLs are `http`/`https`, a key it means nothing by is carried nowhere, and anything else is `TM108` | `block_test.ml` (`no_url_tm108`, `local_url_tm108`, `local_image_tm108`, `not_a_mapping_tm108`, `embed_fence_lowered`) |
+| A card's text is collapsed onto one line and escaped as literal text | `block_test.ml` (`cardlink_lowered`); `forester_6_test.ml` (`card_title_escaped`) |
+
 ### URL and Path Safety (lines 511–522)
 
 | Requirement | Test |
@@ -291,6 +299,7 @@ All 27 stable codes are exercised:
 | `TM105` | `wiki_test.ml`, `inline_test.ml`, `cli_test.ml` |
 | `TM106` | `block_test.ml`, `forester_6_test.ml`, `cli_test.ml` |
 | `TM107` | `block_test.ml`, `inline_test.ml`, `forester_6_test.ml`, `cli_test.ml` |
+| `TM108` | `block_test.ml` (`cards`) |
 | `TM201` | `forest_index_test.ml`, `discovery_test.ml`, `cli_test.ml` |
 | `TM202` | `forest_index_test.ml`, `forest_compile_test.ml`, `workspace_test.ml`, `cli.t/run.t` |
 | `TM203` | `forest_index_test.ml`, `forest_compile_test.ml`, `cli.t/run.t` |

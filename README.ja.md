@@ -508,6 +508,7 @@ subtree も閉じられます。
 | 言語指定なしのコードブロック | `\<html:pre>{\<html:code>{...}}` |
 | 言語指定ありのフェンスコード | `\<html:pre>[class]{language-ocaml}{\<html:code>{...}}` |
 | `---` / `***` / `___` 区切り線 | `\<html:hr>{}` |
+| ` ```cardlink ` / ` ```embed ` リンクカード | `\<html:a>[class]{card-link}…`（[リンクカード](#リンクカード)を参照） |
 | `<!-- comment -->` | 破棄 |
 
 tight なリストと loose なリストは同じ出力になります。この区別は Forester
@@ -758,6 +759,61 @@ TM203: error: missing asset "CYCL-01.jpg"
         under an asset root; `[assets].into` in tree-md.toml says where an
         attachment a published tree embeds is copied to
 ```
+
+## リンクカード
+
+貼り付けた URL をカードに変える Obsidian のプラグインは、取得した内容をフェンス
+ブロックとしてノートに書き込みます。[Auto Card
+Link](https://github.com/nekoshita/obsidian-auto-card-link) は `cardlink`、
+[Link Embed](https://github.com/Seraphli/obsidian-link-embed) 系は `embed`
+です。どちらも読み、プラグインが書いた YAML ではなく**カードとして**描画します。
+
+````markdown
+```cardlink
+url: https://www.forester-notes.org/
+title: "Forester"
+description: "A tool for writing mathematical hypertext."
+host: www.forester-notes.org
+image: https://www.forester-notes.org/cover.png
+favicon: https://www.forester-notes.org/favicon.ico
+```
+````
+
+出力は、各部分にクラスが付いたアンカーです。カードの見た目はノートが書いたこと
+ではなく forest のテーマに属するからです:
+
+```
+\<html:a>[class]{card-link}[href]{…}{\<html:img>[class]{card-link-image}[src]{…}[alt]{}{}
+\<html:span>[class]{card-link-body}{\<html:span>[class]{card-link-title}{…}
+\<html:span>[class]{card-link-description}{…}
+\<html:span>[class]{card-link-host}{\<html:img>[class]{card-link-favicon}[src]{…}[alt]{}{}…}}}
+```
+
+**メタデータは読むだけで、取りに行きません。** ウェブは再現可能な入力ではなく
+（カードは書き換わり、ホストは消え、ランナーにネットワークがないこともある）、
+実行した時刻によって出力が変わるコンパイラは「同じ .tree を二度出す」と約束でき
+ません。プラグインはすでにエディタ上で——人が結果を見られる場所で——ウェブに
+尋ねています。ビルドは書き留められたものを読むだけです。
+
+| キー | 意味 |
+| --- | --- |
+| `url` | 必須。カードのリンク先 |
+| `title` | カードのラベル。無ければ `host`、それも無ければ URL が代わりを務める |
+| `description` | ページ自身の紹介文 |
+| `host` | favicon の隣に表示される |
+| `image` | ページの画像 |
+| `favicon` | サイトのアイコン |
+
+`url`・`image`・`favicon` は `http` または `https` の URL でなければなりません。
+Open Graph が運ぶのはそれであり、カードは tree や vault 内のファイルを指す場所
+ではないからです。`url` が無い・マッピングでない・YAML として壊れている場合は
+`TM108` です。ここで意味を持たないキー（`parser`・`aspectRatio`・`date` など）は
+拒否されず、どこにも出力されません。プラグインが自分のブロックに何を書くかは
+プラグインの領分です。
+
+テキストは1行に畳まれます。改行を含むタイトルが出力の引数の中に改行を持ち込まな
+いためで、他のリテラルテキストと同様にエスケープされます（Forester のソースとし
+て信用しません）。
 
 ## エスケープ
 
@@ -1105,6 +1161,7 @@ JSON Schema のプロファイルは §06 の必須リストちょうどです�
 | `TM105` | 不正な Wiki リンク／埋め込み |
 | `TM106` | 埋め込みの位置が不正 |
 | `TM107` | ディスプレイ数式の位置が不正、または直列化できない TeX |
+| `TM108` | リンクカードブロックが不正 |
 | `TM201` | tree 同一性の重複 |
 | `TM202` | 解決できない参照 |
 | `TM203` | アセットが存在しない |

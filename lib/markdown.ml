@@ -614,9 +614,9 @@ let rec map_block_inlines f (block : Ir.block) =
       Ir.bnode =
         Ir.Footnotes
           (List.map (fun (n, body) -> (n, map_blocks_inlines f body)) entries) }
-  | Ir.Code_block _ | Ir.Thematic_break | Ir.Subtree_directive _
-  | Ir.Subtree_open _ | Ir.Subtree_close _ | Ir.Block_embed _
-  | Ir.Display_math _ -> block
+  | Ir.Code_block _ | Ir.Card_link _ | Ir.Thematic_break
+  | Ir.Subtree_directive _ | Ir.Subtree_open _ | Ir.Subtree_close _
+  | Ir.Block_embed _ | Ir.Display_math _ -> block
 
 (* A paragraph that held nothing but a comment leaves no `\p{}` behind, the
    same bargain a paragraph holding nothing but a block anchor already
@@ -1225,8 +1225,18 @@ let rec lower_blocks source_path depth defs block acc_blocks acc_diags =
      | Ok info ->
        let lines = Cmarkit.Block.Code_block.code cb in
        let code = code_block_lines lines in
-       let node = Ir.Code_block { info; code } in
-       ({ Ir.bnode = node; bspan = span } :: acc_blocks, acc_diags))
+       (* A card block is not code. Showing a reader the YAML an Obsidian
+          plugin wrote for its own use is showing them the machinery. *)
+       (match info with
+        | Ir.Language language when Card.is_card_fence language -> (
+          match Card.parse ~span code with
+          | Ok card ->
+            ({ Ir.bnode = Ir.Card_link card; bspan = span } :: acc_blocks,
+             acc_diags)
+          | Error diagnostics -> (acc_blocks, diagnostics @ acc_diags))
+        | Ir.Language _ | Ir.No_info ->
+          let node = Ir.Code_block { info; code } in
+          ({ Ir.bnode = node; bspan = span } :: acc_blocks, acc_diags)))
 
   | Cmarkit.Block.Thematic_break (_tb, tb_meta) ->
     let span = meta_span source_path 0 tb_meta in

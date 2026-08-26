@@ -15,7 +15,7 @@ let code_class = function
   | Diagnostic.TM001 | Diagnostic.TM002 | Diagnostic.TM003
   | Diagnostic.TM101 | Diagnostic.TM102 | Diagnostic.TM103
   | Diagnostic.TM104 | Diagnostic.TM105 | Diagnostic.TM106
-  | Diagnostic.TM107
+  | Diagnostic.TM107 | Diagnostic.TM108
   | Diagnostic.TM201 | Diagnostic.TM202 | Diagnostic.TM203
   | Diagnostic.TM204 | Diagnostic.TM205 | Diagnostic.TM206
   | Diagnostic.TM301 | Diagnostic.TM302 | Diagnostic.TM303

@@ -272,6 +272,18 @@ needed copying.
   $ tree-md build --config publish/tree-md.toml
   build: 0 created, 0 replaced, 0 deleted, 4 unchanged, 1 unpublished
 
+A link card is the metadata an Obsidian plugin already fetched for a URL and
+wrote into the note. It is rendered as the card a reader sees rather than as
+the YAML the plugin writes it in, and the build asks the web nothing.
+
+  $ cat publish/generated/PUBLIC/index.tree
+  \title{索引}
+  \p{[[notes]]}
+  
+  \<html:a>[class]{card-link}[href]{https://www.forester-notes.org/}{\<html:span>[class]{card-link-body}{\<html:span>[class]{card-link-title}{Forester}
+  \<html:span>[class]{card-link-description}{A tool for writing mathematical hypertext.}
+  \<html:span>[class]{card-link-host}{www.forester-notes.org}}}
+
 Without the table every source is published, and the draft's broken link is a
 `TM202` like any other.
 

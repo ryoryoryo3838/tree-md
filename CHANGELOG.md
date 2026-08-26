@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A ` ```cardlink ` or ` ```embed ` block — what an Obsidian link-card plugin
+  writes into a note after fetching a URL's Open Graph metadata — is rendered
+  as the card a reader sees rather than as the YAML the plugin keeps it in.
+  Auto Card Link writes the first fence and Link Embed and its kin the second;
+  both are read, and the parts of the emitted anchor are classed
+  (`card-link`, `card-link-title`, `card-link-description`, `card-link-host`,
+  `card-link-image`, `card-link-favicon`) rather than styled, because how a
+  card looks belongs to the forest's theme and not to what a note said.
+
+  The metadata is read, never fetched. The web is not a reproducible input — a
+  page's card changes, a host goes away, a runner has no network — and a
+  compiler whose output depended on when it ran could not promise the same
+  `.tree` twice. The plugin already asked the web, in the editor, where a
+  person could see the answer.
+
+  `url` is required and it, `image` and `favicon` must be `http` or `https`
+  URLs: that is what Open Graph carries, and a card is not a place to name a
+  tree or a file in the vault. A block with no `url`, one that is not a
+  mapping, or one whose YAML does not parse is the new `TM108`. A key none of
+  this means anything by — `parser`, `aspectRatio` — is carried nowhere rather
+  than rejected.
+
 - `[assets].into` in `tree-md.toml` says where an attachment a published tree
   embeds is copied to, so that a vault can keep its attachments beside its
   notes — `DAILY/assets/CYCL-01.jpg` — and Forester can still serve them,

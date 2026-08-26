@@ -329,6 +329,8 @@ let rec emit_block (w : writer) buf (block : Ir.block) =
     emit_list w buf kind tight items
   | Ir.Code_block { info; code } ->
     emit_code_block w buf info code
+  | Ir.Card_link card ->
+    emit_card w buf card
   | Ir.Table { alignment; header; rows } ->
     emit_table w buf alignment header rows
   | Ir.Callout { kind; folded; title; body } ->
@@ -527,6 +529,60 @@ and emit_footnotes (w : writer) buf entries =
       Buffer.add_char buf '}')
     entries;
   Buffer.add_char buf '}'
+
+(* A link card is an anchor a reader can see: the page's picture, its title,
+   the words it introduces itself with, and where it lives. The parts are
+   classed rather than styled, because how a card looks belongs to the
+   forest's theme and not to what a note said. *)
+and emit_card (w : writer) buf (card : Ir.card) =
+  let element tag class_name write_body =
+    Buffer.add_string buf ("\\<html:" ^ tag ^ ">");
+    w.xml_attr buf "class" (fun b -> w.text b class_name);
+    write_body ()
+  in
+  let image class_name source =
+    element "img" class_name (fun () ->
+      w.xml_attr buf "src" (fun b -> w.uri_text b source);
+      (* The title is right beside it, so the picture adds nothing a reader
+         who cannot see it needs read out. *)
+      Buffer.add_string buf "[alt]{}{}")
+  in
+  let line class_name text =
+    element "span" class_name (fun () ->
+      Buffer.add_char buf '{';
+      w.text buf text;
+      Buffer.add_char buf '}')
+  in
+  Buffer.add_string buf "\\<html:a>";
+  w.xml_attr buf "class" (fun b -> w.text b "card-link");
+  w.xml_attr buf "href" (fun b -> w.uri_text b card.Ir.card_url);
+  Buffer.add_char buf '{';
+  (match card.Ir.card_image with
+   | Some source ->
+     image "card-link-image" source;
+     Buffer.add_char buf '\n'
+   | None -> ());
+  Buffer.add_string buf "\\<html:span>";
+  w.xml_attr buf "class" (fun b -> w.text b "card-link-body");
+  Buffer.add_char buf '{';
+  line "card-link-title" card.Ir.card_title;
+  (match card.Ir.card_description with
+   | Some description ->
+     Buffer.add_char buf '\n';
+     line "card-link-description" description
+   | None -> ());
+  (match card.Ir.card_host, card.Ir.card_favicon with
+   | None, _ -> ()
+   | Some host, favicon ->
+     Buffer.add_char buf '\n';
+     element "span" "card-link-host" (fun () ->
+       Buffer.add_char buf '{';
+       (match favicon with
+        | Some source -> image "card-link-favicon" source
+        | None -> ());
+       w.text buf host;
+       Buffer.add_char buf '}'));
+  Buffer.add_string buf "}}"
 
 and emit_code_block (w : writer) buf info code =
   Buffer.add_string buf "\\<html:pre>";

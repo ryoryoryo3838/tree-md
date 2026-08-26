@@ -2,7 +2,7 @@ type severity = Error | Warning
 
 type code =
   | TM001 | TM002 | TM003
-  | TM101 | TM102 | TM103 | TM104 | TM105 | TM106 | TM107
+  | TM101 | TM102 | TM103 | TM104 | TM105 | TM106 | TM107 | TM108
   | TM201 | TM202 | TM203 | TM204 | TM205 | TM206
   | TM301 | TM302 | TM303 | TM304 | TM305 | TM306
   | TM401 | TM402 | TM403 | TM404 | TM500
@@ -42,7 +42,7 @@ let code_string = function
   | TM001 -> "TM001" | TM002 -> "TM002" | TM003 -> "TM003"
   | TM101 -> "TM101" | TM102 -> "TM102" | TM103 -> "TM103"
   | TM104 -> "TM104" | TM105 -> "TM105" | TM106 -> "TM106"
-  | TM107 -> "TM107"
+  | TM107 -> "TM107" | TM108 -> "TM108"
   | TM201 -> "TM201" | TM202 -> "TM202" | TM203 -> "TM203"
   | TM204 -> "TM204" | TM205 -> "TM205" | TM206 -> "TM206"
   | TM301 -> "TM301" | TM302 -> "TM302" | TM303 -> "TM303"

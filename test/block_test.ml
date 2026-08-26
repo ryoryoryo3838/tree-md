@@ -60,6 +60,14 @@ let block_node_to_string = function
       | Tree_md.Ir.Language lang -> Printf.sprintf "Lang(%S)" lang
     in
     Printf.sprintf "CodeBlock(%s %S)" info_str code
+  | Tree_md.Ir.Card_link card ->
+    let optional = function Some value -> value | None -> "-" in
+    Printf.sprintf "Card(%S %S %S %S %S %S)"
+      card.Tree_md.Ir.card_url card.Tree_md.Ir.card_title
+      (optional card.Tree_md.Ir.card_description)
+      (optional card.Tree_md.Ir.card_host)
+      (optional card.Tree_md.Ir.card_image)
+      (optional card.Tree_md.Ir.card_favicon)
   | Tree_md.Ir.Thematic_break -> "ThematicBreak"
   | Tree_md.Ir.Heading { level; title } ->
     let parts = List.map (fun i -> node_to_string i.Tree_md.Ir.node) title in
@@ -779,6 +787,114 @@ let test_document_span () =
 
 (* ── Run ── *)
 
+(* ── Link cards ── *)
+
+let card_block =
+  "```cardlink\n\
+   url: https://booklog.jp/item/1/4840241929\n\
+   title: \"\xe6\x97\x85\xe3\x81\xab\xe5\x87\xba\xe3\x82\x88\xe3\x81\x86\"\n\
+   description: \"one\nline\"\n\
+   host: booklog.jp\n\
+   image: https://m.media-amazon.com/images/I/51308eIzCfL._SL500_.jpg\n\
+   ```"
+
+(* The plugin's own YAML is not code: it is a card, and a reader sees the
+   card. A key tree-md means nothing by is the plugin's business. *)
+let test_cardlink_lowered () =
+  match parse (card_block ^ "\n") with
+  | Ok doc ->
+    (match doc.blocks with
+     | [ { bnode = Tree_md.Ir.Card_link card; _ } ] ->
+       Alcotest.(check string) "url"
+         "https://booklog.jp/item/1/4840241929" card.Tree_md.Ir.card_url;
+       Alcotest.(check string) "title"
+         "\xe6\x97\x85\xe3\x81\xab\xe5\x87\xba\xe3\x82\x88\xe3\x81\x86"
+         card.Tree_md.Ir.card_title;
+       (* A card is one line however the page wrote it. *)
+       Alcotest.(check (option string)) "description on one line"
+         (Some "one line") card.Tree_md.Ir.card_description;
+       Alcotest.(check (option string)) "host"
+         (Some "booklog.jp") card.Tree_md.Ir.card_host;
+       Alcotest.(check (option string)) "image"
+         (Some "https://m.media-amazon.com/images/I/51308eIzCfL._SL500_.jpg")
+         card.Tree_md.Ir.card_image;
+       Alcotest.(check (option string)) "no favicon was written"
+         None card.Tree_md.Ir.card_favicon
+     | _ -> Alcotest.fail "expected a card")
+  | Error diags ->
+    let msgs =
+      List.map (fun d -> d.Tree_md.Diagnostic.message) diags
+      |> String.concat "; "
+    in
+    Alcotest.fail ("a card block was rejected: " ^ msgs)
+
+(* Link Embed and Link Cards write the same thing under `embed`, and carry
+   keys of their own that mean nothing here. *)
+let test_embed_fence_lowered () =
+  match
+    parse
+      "```embed\n\
+       title: \"Example\"\n\
+       url: https://example.test/a\n\
+       favicon: https://example.test/favicon.ico\n\
+       aspectRatio: 1.5\n\
+       parser: local\n\
+       ```\n"
+  with
+  | Ok doc ->
+    (match doc.blocks with
+     | [ { bnode = Tree_md.Ir.Card_link card; _ } ] ->
+       Alcotest.(check string) "title" "Example" card.Tree_md.Ir.card_title;
+       Alcotest.(check (option string)) "favicon"
+         (Some "https://example.test/favicon.ico") card.Tree_md.Ir.card_favicon
+     | _ -> Alcotest.fail "expected a card")
+  | Error diags ->
+    let msgs =
+      List.map (fun d -> d.Tree_md.Diagnostic.message) diags
+      |> String.concat "; "
+    in
+    Alcotest.fail ("an embed block was rejected: " ^ msgs)
+
+(* A card with nothing written on it is a link with no label, so the host
+   stands in for a title the plugin did not fetch. *)
+let test_card_without_a_title_falls_back_to_the_host () =
+  match parse "```cardlink\nurl: https://example.test/a\nhost: example.test\n```\n" with
+  | Ok doc ->
+    (match doc.blocks with
+     | [ { bnode = Tree_md.Ir.Card_link card; _ } ] ->
+       Alcotest.(check string) "the host is the label"
+         "example.test" card.Tree_md.Ir.card_title
+     | _ -> Alcotest.fail "expected a card")
+  | Error _ -> Alcotest.fail "a card with no title was rejected"
+
+let test_card_without_a_url_rejected () =
+  match parse "```cardlink\ntitle: \"Example\"\n```\n" with
+  | Error diags ->
+    Alcotest.(check bool) "no url is TM108" true (has_diag_code diags "TM108")
+  | Ok _ -> Alcotest.fail "expected TM108 for a card with no url"
+
+(* A card links to a page and shows a picture of it; both are web URLs. A
+   destination naming a tree or a file in the vault is not a card. *)
+let test_card_with_a_local_url_rejected () =
+  match parse "```cardlink\nurl: notes/frege\n```\n" with
+  | Error diags ->
+    Alcotest.(check bool) "a local url is TM108" true (has_diag_code diags "TM108")
+  | Ok _ -> Alcotest.fail "expected TM108 for a card naming a tree"
+
+let test_card_with_a_local_image_rejected () =
+  match
+    parse "```cardlink\nurl: https://example.test/a\nimage: images/x.png\n```\n"
+  with
+  | Error diags ->
+    Alcotest.(check bool) "a local image is TM108" true (has_diag_code diags "TM108")
+  | Ok _ -> Alcotest.fail "expected TM108 for a card with a local image"
+
+let test_malformed_card_rejected () =
+  match parse "```cardlink\n- url: https://example.test/a\n```\n" with
+  | Error diags ->
+    Alcotest.(check bool) "a list is TM108" true (has_diag_code diags "TM108")
+  | Ok _ -> Alcotest.fail "expected TM108 for a card that is not a mapping"
+
 let () =
   let open Alcotest in
   run "Block"
@@ -849,6 +965,15 @@ let () =
     ; "document_span", [ test_case "document_span" `Quick test_document_span ]
     ; "indented_code_multi_line", [ test_case "indented_code_multi_line" `Quick test_indented_code_multi_line ]
     ; "fenced_code_multi_line", [ test_case "fenced_code_multi_line" `Quick test_fenced_code_multi_line ]
+    ; "cards", [
+        test_case "cardlink_lowered" `Quick test_cardlink_lowered;
+        test_case "embed_fence_lowered" `Quick test_embed_fence_lowered;
+        test_case "title_falls_back_to_host" `Quick
+          test_card_without_a_title_falls_back_to_the_host;
+        test_case "no_url_tm108" `Quick test_card_without_a_url_rejected;
+        test_case "local_url_tm108" `Quick test_card_with_a_local_url_rejected;
+        test_case "local_image_tm108" `Quick test_card_with_a_local_image_rejected;
+        test_case "not_a_mapping_tm108" `Quick test_malformed_card_rejected ]
     ; "embed_in_blockquote_list_rejected", [ test_case "embed_in_blockquote_list_rejected" `Quick test_embed_in_blockquote_list_rejected ]
     ; "display_math_in_blockquote_list_rejected", [ test_case "display_math_in_blockquote_list_rejected" `Quick test_display_math_in_blockquote_list_rejected ]
     ]

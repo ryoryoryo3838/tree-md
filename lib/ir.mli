@@ -33,6 +33,18 @@ and inline_node =
   | Hard_break
   | Soft_break
 
+(* [url] and [image] are percent-encoded, as a URI reference must be; the
+   text fields are the page's own words, collapsed onto one line, and are
+   escaped like any other literal text when they are emitted. *)
+type card = {
+  card_url : string;
+  card_title : string;
+  card_description : string option;
+  card_host : string option;
+  card_image : string option;
+  card_favicon : string option;
+}
+
 type list_kind = Unordered | Ordered of int
 type table_alignment = Align_none | Align_left | Align_center | Align_right
 
@@ -69,6 +81,11 @@ and block_node =
       title : inline list;
       body : block list;
     }
+  (* A link card: the OGP metadata an Obsidian plugin fetched for a URL and
+     wrote into the note as a fenced block — `cardlink` for Auto Card Link,
+     `embed` for Link Embed and its kin. The plugin having written it down is
+     what lets a build render the card without asking the web anything. *)
+  | Card_link of card
   | Thematic_break
   | Heading of { level : int; title : inline list }
   | Subtree_directive of string

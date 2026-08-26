@@ -520,6 +520,7 @@ shape of the emitted tree with nothing to show for it.
 | GFM table | `\<html:table>` / `thead` / `tbody` / `tr` / `th` / `td`, alignment as `[style]{text-align: …}` |
 | `- [ ]` / `- [x]` task item | `\li{\<html:input>[type]{checkbox}[disabled]{disabled}…{} …}` |
 | `> [!note] Title` callout | `\<html:blockquote>[class]{callout}[data-callout]{note}{…}` |
+| ` ```cardlink ` / ` ```embed ` link card | `\<html:a>[class]{card-link}…` — see [Link cards](#link-cards) |
 | `[^1]: …` footnote definition | gathered into the footnote section — see [Footnotes](#footnotes) |
 | `<!-- comment -->` | discarded |
 
@@ -776,6 +777,62 @@ TM203: error: missing asset "CYCL-01.jpg"
         under an asset root; `[assets].into` in tree-md.toml says where an
         attachment a published tree embeds is copied to
 ```
+
+## Link cards
+
+An Obsidian plugin that turns a pasted URL into a card writes what it fetched
+into the note as a fenced block: [Auto Card
+Link](https://github.com/nekoshita/obsidian-auto-card-link) uses `cardlink`,
+[Link Embed](https://github.com/Seraphli/obsidian-link-embed) and its kin use
+`embed`. Both are read, and rendered as the card rather than as the YAML the
+plugin writes it in.
+
+````markdown
+```cardlink
+url: https://www.forester-notes.org/
+title: "Forester"
+description: "A tool for writing mathematical hypertext."
+host: www.forester-notes.org
+image: https://www.forester-notes.org/cover.png
+favicon: https://www.forester-notes.org/favicon.ico
+```
+````
+
+becomes an anchor whose parts are classed rather than styled, because how a
+card looks belongs to the forest's theme and not to what a note said:
+
+```
+\<html:a>[class]{card-link}[href]{…}{\<html:img>[class]{card-link-image}[src]{…}[alt]{}{}
+\<html:span>[class]{card-link-body}{\<html:span>[class]{card-link-title}{…}
+\<html:span>[class]{card-link-description}{…}
+\<html:span>[class]{card-link-host}{\<html:img>[class]{card-link-favicon}[src]{…}[alt]{}{}…}}}
+```
+
+**The metadata is read, never fetched.** The web is not a reproducible input —
+a page's card changes, a host goes away, a runner has no network — and a
+compiler whose output depended on when it ran could not promise the same
+`.tree` twice. The plugin already asked the web, in the editor, where a person
+could see the answer; a build only reads what was written down.
+
+| Key | Meaning |
+| --- | --- |
+| `url` | Required. The page the card links to |
+| `title` | The card's label. Absent, the `host` stands in for it, then the URL |
+| `description` | The words the page introduces itself with |
+| `host` | Shown beside the favicon |
+| `image` | The picture of the page |
+| `favicon` | The site's icon |
+
+`url`, `image` and `favicon` must be `http` or `https` URLs — that is what
+Open Graph carries, and a card is not a place to name a tree or a file in the
+vault. A block with no `url`, one that is not a mapping, or one whose YAML
+does not parse is `TM108`. A key none of this means anything by — `parser`,
+`aspectRatio`, `date` — is carried nowhere rather than rejected: what a plugin
+writes into its own block is its business.
+
+Text is collapsed onto one line, so a title carrying a newline does not put
+one inside the emitted argument, and it is escaped like any other literal text
+rather than trusted to be Forester source.
 
 ## Escaping
 
@@ -1129,6 +1186,7 @@ rendered alongside — `TM101 (schema_additional_properties): warning: …`.
 | `TM105` | Malformed wiki link or embed |
 | `TM106` | Embed in an invalid position |
 | `TM107` | Display math in an invalid position, or unserializable TeX |
+| `TM108` | Malformed link card block |
 | `TM201` | Duplicate tree identity |
 | `TM202` | Unresolved reference |
 | `TM203` | Missing asset |

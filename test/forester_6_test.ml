@@ -719,6 +719,61 @@ let test_deeply_nested_inlines () =
 
 (* ── Run ── *)
 
+(* ── Link cards ── *)
+
+let card ?description ?host ?image ?favicon ~url ~title () =
+  { Ir.bnode =
+      Ir.Card_link
+        { Ir.card_url = url; card_title = title; card_description = description;
+          card_host = host; card_image = image; card_favicon = favicon };
+    Ir.bspan = zero_span }
+
+(* Every part is classed rather than styled: how a card looks belongs to the
+   forest's theme, not to what a note said. *)
+let test_card_emission () =
+  let t =
+    outline_blocks "test"
+      [ card ~url:"https://example.test/a" ~title:"A title"
+          ~description:"A description" ~host:"example.test"
+          ~image:"https://example.test/cover.png"
+          ~favicon:"https://example.test/favicon.ico" () ]
+  in
+  Alcotest.(check string) "the whole card"
+    ("\\title{test}\n\
+      \\<html:a>[class]{card-link}[href]{https://example.test/a}{\
+      \\<html:img>[class]{card-link-image}[src]{https://example.test/cover.png}[alt]{}{}\n\
+      \\<html:span>[class]{card-link-body}{\
+      \\<html:span>[class]{card-link-title}{A title}\n\
+      \\<html:span>[class]{card-link-description}{A description}\n\
+      \\<html:span>[class]{card-link-host}{\
+      \\<html:img>[class]{card-link-favicon}[src]{https://example.test/favicon.ico}[alt]{}{}\
+      example.test}}}\n")
+    (emit_str t)
+
+(* A plugin writes what it managed to fetch, so a card may be a title and a
+   link and nothing else. *)
+let test_bare_card_emission () =
+  let t =
+    outline_blocks "test" [ card ~url:"https://example.test/a" ~title:"A" () ]
+  in
+  Alcotest.(check string) "title and link alone"
+    "\\title{test}\n\
+     \\<html:a>[class]{card-link}[href]{https://example.test/a}{\
+     \\<html:span>[class]{card-link-body}{\
+     \\<html:span>[class]{card-link-title}{A}}}\n"
+    (emit_str t)
+
+(* The title is the page's own words, so it is escaped like any other literal
+   text rather than trusted to be Forester source. *)
+let test_card_title_is_escaped () =
+  let t =
+    outline_blocks "test"
+      [ card ~url:"https://example.test/a" ~title:"100% {of} [it]" () ]
+  in
+  Alcotest.(check bool) "escaped title" true
+    (string_contains (emit_str t)
+       "100\\% \\verbFMD|{FMDof\\verbFMD|}FMD")
+
 let () =
   let open Alcotest in
   run "Forester_6"
@@ -817,6 +872,11 @@ let () =
         test_case "untitled_subtree_keeps_id" `Quick test_untitled_subtree_keeps_id;
         test_case "block_after_subtree_keeps_order" `Quick test_block_after_subtree_keeps_order;
         test_case "nested_untitled_subtree" `Quick test_nested_untitled_subtree;
+      ]
+    ; "cards", [
+        test_case "card_emission" `Quick test_card_emission;
+        test_case "bare_card_emission" `Quick test_bare_card_emission;
+        test_case "card_title_escaped" `Quick test_card_title_is_escaped;
       ]
     ; "resolution", [
         test_case "resolution_empty" `Quick test_resolution_empty;
