@@ -30,7 +30,20 @@ val resolve_reference : t -> from:string -> string -> string option
    index has not heard of because that source did not parse. *)
 val source_of_filename : Discovery.source_file list -> string -> string option
 
+(* An attachment a published tree embedded, and where a build copies it so
+   that Forester has it under an asset root. *)
+type attachment_copy = {
+  attachment : Discovery.attachment;
+  destination : Path_safe.relative;
+}
+
+(* [attachments] is what the source roots hold besides sources, and [into] is
+   `[assets].into`. Without them an embed resolves only against the asset
+   roots, which is what a forest did before attachments could be published. *)
 val resolve :
+  ?attachments:Discovery.attachment list ->
+  ?into:Config.attachments ->
   Config.forest -> t ->
   documents:Parsed_document.t list ->
-  ((string * Resolution.t) list * Diagnostic.t list, Diagnostic.t list) result
+  (((string * Resolution.t) list * attachment_copy list) * Diagnostic.t list,
+   Diagnostic.t list) result

@@ -49,7 +49,7 @@ let json_field name value = "\"" ^ name ^ "\": " ^ value
 
 let object_json fields = "{" ^ String.concat "," fields ^ "}"
 
-let default_fields ?(format = "1") ?(compiler = "\"0.1.0\"")
+let default_fields ?(format = "2") ?(compiler = "\"0.1.0\"")
     ?(target = "\"" ^ Forester_6.target ^ "\"") ?(files = "[]") () =
   [ json_field "format" format;
     json_field "compiler" compiler;
@@ -75,13 +75,13 @@ let expect_tm402 name json =
 
 let test_canonical_empty () =
   let manifest = Manifest.of_expected [] in
-  Alcotest.(check int) "format" 1 manifest.Manifest.format;
+  Alcotest.(check int) "format" 2 manifest.Manifest.format;
   Alcotest.(check string) "compiler version"
     Manifest.current_version manifest.Manifest.compiler;
   Alcotest.(check string) "pinned target" Forester_6.target manifest.Manifest.target;
   Alcotest.(check (list string)) "no files" [] (files_strings manifest);
   let canonical =
-    "{\n  \"format\": 1,\n  \"compiler\": \"" ^ Manifest.current_version
+    "{\n  \"format\": 2,\n  \"compiler\": \"" ^ Manifest.current_version
     ^ "\",\n  \"target\": \"" ^ Forester_6.target
     ^ "\",\n  \"files\": []\n}\n"
   in
@@ -96,7 +96,7 @@ let test_canonical_sorted_entries () =
   Alcotest.(check string) "sort invariant"
     (Manifest.encode (Manifest.of_expected (List.rev records))) encoded;
   let canonical =
-    "{\n  \"format\": 1,\n  \"compiler\": \"" ^ Manifest.current_version
+    "{\n  \"format\": 2,\n  \"compiler\": \"" ^ Manifest.current_version
     ^ "\",\n  \"target\": \"" ^ Forester_6.target
     ^ "\",\n  \"files\": [\n    {\n      \"source\": \"trees-md/a/foo.tree.md\",\n      \"output\": \"a/foo.tree\",\n      \"sha256\": \""
     ^ sha_64
@@ -261,9 +261,9 @@ let test_tm402_missing_files () =
                = "\"files\""))
           (default_fields ())))
 
-let test_tm402_format_2 () =
-  expect_tm402 "format 2"
-    (object_json (default_fields ~format:"2" ()))
+let test_tm402_format_3 () =
+  expect_tm402 "format 3"
+    (object_json (default_fields ~format:"3" ()))
 
 let test_tm402_format_wrong_type () =
   expect_tm402 "format string"
@@ -372,21 +372,51 @@ let test_tm402_dot_and_dotdot_path () =
       (object_json (default_fields ~files ())))
     outputs
 
-let test_tm402_non_tree_output () =
+(* An attachment is copied from whatever the vault called it to wherever
+   `[assets].into` puts it, so neither end of an entry is named `.tree`
+   any more. What a managed file is called is not the manifest's business. *)
+let test_attachment_entry_decodes () =
   let files =
     files_json
-      [ entry_json ~source:"\"trees-md/a.tree.md\"" ~output:"\"a.html\""
+      [ entry_json ~source:"\"trees-md/DAILY/assets/CYCL-01.jpg\""
+          ~output:"\"assets/vault/DAILY/assets/CYCL-01.jpg\""
           ~sha256:("\"" ^ sha_64 ^ "\"") ]
   in
-  expect_tm402 "non .tree output" (object_json (default_fields ~files ()))
+  match
+    Manifest.decode ~path:"out/.tree-md-manifest.json"
+      (object_json (default_fields ~files ()))
+  with
+  | Error diagnostics ->
+    let messages = List.map (fun d -> d.Diagnostic.message) diagnostics in
+    Alcotest.fail ("an attachment entry was refused: " ^ String.concat "; " messages)
+  | Ok decoded ->
+    Alcotest.(check (list string)) "the copy is owned as written"
+      [ "trees-md/DAILY/assets/CYCL-01.jpg\
+         |assets/vault/DAILY/assets/CYCL-01.jpg|" ^ sha_64 ]
+      (files_strings decoded)
 
-let test_tm402_non_tree_md_source () =
+(* A format 1 manifest named its outputs below the output root. Reading one
+   lifts them into the paths the rest of the compiler works in, so upgrading
+   rewrites the file instead of rebuilding the forest. *)
+let test_format_1_outputs_are_lifted () =
   let files =
     files_json
-      [ entry_json ~source:"\"trees-md/a.md\"" ~output:"\"a.tree\""
+      [ entry_json ~source:"\"trees-md/a.tree.md\"" ~output:"\"a.tree\""
           ~sha256:("\"" ^ sha_64 ^ "\"") ]
   in
-  expect_tm402 "non .tree.md source" (object_json (default_fields ~files ()))
+  match
+    Manifest.decode ~output_root:(rel "generated")
+      ~path:"generated/.tree-md-manifest.json"
+      (object_json (default_fields ~format:"1" ~files ()))
+  with
+  | Error diagnostics ->
+    let messages = List.map (fun d -> d.Diagnostic.message) diagnostics in
+    Alcotest.fail ("a format 1 manifest was refused: " ^ String.concat "; " messages)
+  | Ok decoded ->
+    Alcotest.(check int) "read as the current format" 2 decoded.Manifest.format;
+    Alcotest.(check (list string)) "outputs lifted by the output root"
+      [ "trees-md/a.tree.md|generated/a.tree|" ^ sha_64 ]
+      (files_strings decoded)
 
 let test_tm402_tree_md_component () =
   let outputs = [ ".tree-md-stage/a.tree"; "sub/.tree-md-x/a.tree" ] in
@@ -409,6 +439,10 @@ let () =
         test_case "round_trip" `Quick test_round_trip;
         test_case "decode_sorts" `Quick test_decode_sorts;
       ]
+    ; "formats", [
+        test_case "attachment_entry" `Quick test_attachment_entry_decodes;
+        test_case "format_1_lifted" `Quick test_format_1_outputs_are_lifted;
+      ]
     ; "sha256", [
         test_case "sha256" `Quick test_sha256;
       ]
@@ -428,7 +462,7 @@ let () =
         test_case "missing_compiler" `Quick test_tm402_missing_compiler;
         test_case "missing_target" `Quick test_tm402_missing_target;
         test_case "missing_files" `Quick test_tm402_missing_files;
-        test_case "format_2" `Quick test_tm402_format_2;
+        test_case "format_3" `Quick test_tm402_format_3;
         test_case "format_wrong_type" `Quick test_tm402_format_wrong_type;
         test_case "compiler_wrong_type" `Quick test_tm402_compiler_wrong_type;
         test_case "target_wrong_type" `Quick test_tm402_target_wrong_type;
@@ -443,8 +477,7 @@ let () =
         test_case "hash_wrong_type" `Quick test_tm402_hash_wrong_type;
         test_case "absolute_path" `Quick test_tm402_absolute_path;
         test_case "dot_and_dotdot_path" `Quick test_tm402_dot_and_dotdot_path;
-        test_case "non_tree_output" `Quick test_tm402_non_tree_output;
-        test_case "non_tree_md_source" `Quick test_tm402_non_tree_md_source;
+
         test_case "tree_md_component" `Quick test_tm402_tree_md_component;
       ]
     ]

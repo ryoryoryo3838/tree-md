@@ -83,19 +83,19 @@ module String_map = Map.Make (String)
 
 type disk_state = Missing | Regular of string | Other
 
-(* Walks every component of a relative path under the output root using
+(* Walks every component of a relative path under [root] using
    lstat, so a symlink anywhere along the path is detected without being
    followed. Returns Ok false as soon as a symlink or a non-directory in an
    intermediate position obstructs the path; missing ancestors are fine.
    The final component is not followed: the caller opens it with O_NOFOLLOW
    so a swap after this check is still safe. *)
-let safe_components output_root rel =
+let safe_components root rel =
   let parts = String.split_on_char '/' (Path_safe.to_string rel) in
   let rec walk acc = function
     | [] -> Ok true
     | component :: rest ->
       let rel_path = if acc = "" then component else acc ^ "/" ^ component in
-      let abs = Filename.concat output_root rel_path in
+      let abs = Filename.concat root rel_path in
       (match Unix.lstat abs with
        | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok true
        | { Unix.st_kind = Unix.S_LNK; _ } -> Ok false
@@ -114,9 +114,9 @@ let safe_components output_root rel =
    and the descriptor's (dev, ino) is compared with a fresh lstat of the
    path, so a symlink swapped in after the check is refused instead of
    followed. Only regular files are hashed. *)
-let observe output_root rel =
-  let abs = Filename.concat output_root (Path_safe.to_string rel) in
-  match safe_components output_root rel with
+let observe root rel =
+  let abs = Filename.concat root (Path_safe.to_string rel) in
+  match safe_components root rel with
   | Error diagnostics -> Error diagnostics
   | Ok false -> Ok Other
   | Ok true ->
@@ -166,20 +166,20 @@ let observe output_root rel =
 (* Recovery never accepts content outside the states recorded by the
    journal: a non-regular output path is a TM403 recovery precondition
    failure. *)
-let observe_transactional output_root rel =
-  match observe output_root rel with
+let observe_transactional root rel =
+  match observe root rel with
   | Error diagnostics -> Error diagnostics
   | Ok Missing -> Ok Transaction.Missing
   | Ok (Regular hash) -> Ok (Transaction.Hash hash)
   | Ok Other ->
     Error
-      [ tm (Filename.concat output_root (Path_safe.to_string rel)) TM403
+      [ tm (Filename.concat root (Path_safe.to_string rel)) TM403
           "output path is not a regular file; recovery refused" ]
 
 (* Precompute the disk observation of every path a journal can consult and
    return a total lookup; any path missing from the table is treated as
    absent, which roll_forward rejects with a TM403 precondition error. *)
-let observers output_root paths =
+let observers root paths =
   let observations = Hashtbl.create 8 in
   let* () =
     List.fold_left
@@ -187,7 +187,7 @@ let observers output_root paths =
         match acc with
         | Error _ -> acc
         | Ok () ->
-          (match observe_transactional output_root path with
+          (match observe_transactional root path with
            | Error diagnostics -> Error diagnostics
            | Ok observed ->
              Hashtbl.replace observations (Path_safe.to_string path) observed;
@@ -201,7 +201,10 @@ let observers output_root paths =
 
 (* ── read-only check ── *)
 
-let compare_states output_root expecteds old_manifest =
+(* [content_root] is what a managed path is named below: the directory
+   tree-md.toml is in, which holds the output root and, when `[assets].into`
+   says so, the asset root an attachment is copied under. *)
+let compare_states content_root expecteds old_manifest =
   let expected_by_output =
     List.fold_left
       (fun m (e : Compiler.expected) ->
@@ -224,8 +227,8 @@ let compare_states output_root expecteds old_manifest =
      hash match with an outdated manifest → TM303 stale. *)
   String_map.iter
     (fun output (expected : Compiler.expected) ->
-      let abs = Filename.concat output_root output in
-      match observe output_root expected.Compiler.output_relative with
+      let abs = Filename.concat content_root output in
+      match observe content_root expected.Compiler.output_relative with
       | Error diagnostics -> List.iter add diagnostics
       | Ok Missing -> add (tm abs TM301 "missing generated output")
       | Ok Other ->
@@ -260,8 +263,8 @@ let compare_states output_root expecteds old_manifest =
   String_map.iter
     (fun output (entry : Manifest.entry) ->
       if not (String_map.mem output expected_by_output) then
-        let abs = Filename.concat output_root output in
-        match observe output_root entry.Manifest.output with
+        let abs = Filename.concat content_root output in
+        match observe content_root entry.Manifest.output with
         | Error diagnostics -> List.iter add diagnostics
         | Ok Missing -> ()
         | Ok Other ->
@@ -280,6 +283,31 @@ let compare_states output_root expecteds old_manifest =
     )
     manifest_by_output;
   List.rev !diags
+
+(* A manifest is trusted to say what the compiler owns, and what it owns is
+   deleted when the sources stop producing it. Nothing tree-md writes is ever
+   under a source root — the output root may not overlap one, and neither may
+   `[assets].into` — so a manifest that names a file there is not describing
+   this compiler's work, and acting on it would delete somebody's note. *)
+let check_manifest_scope config (manifest : Manifest.t) path =
+  let source_roots = List.map snd config.Config.source_roots in
+  let content_root = config.Config.directory in
+  match
+    List.find_opt
+      (fun (entry : Manifest.entry) ->
+        let abs =
+          Filename.concat content_root (Path_safe.to_string entry.Manifest.output)
+        in
+        List.exists (fun root -> Path_safe.is_within ~root abs) source_roots)
+      manifest.Manifest.files
+  with
+  | None -> Ok ()
+  | Some entry ->
+    Error
+      [ tm path TM402
+          (path ^ ": manifest names \""
+           ^ Path_safe.to_string entry.Manifest.output
+           ^ "\", which is under a source root; no build writes there") ]
 
 let finish_check output_root start_snapshot diagnostics =
   match Workspace_fs.snapshot ~output_root with
@@ -348,35 +376,50 @@ let check ~config_path =
                 let expecteds = forest.Compiler.outputs in
                 (match start_snapshot.Workspace_fs.manifest with
                  | Some bytes ->
-                   (match Manifest.decode ~path:(manifest_path output_root) bytes with
+                   let path = manifest_path output_root in
+                   (match
+                      Manifest.decode ~output_root:(fst config.Config.output_root)
+                        ~path bytes
+                    with
                     | Error diagnostics -> report (base_diags () @ diagnostics)
                     | Ok old_manifest ->
-                      finish_check output_root start_snapshot
-                        (warnings @ base_diags ()
-                         @ compare_states output_root expecteds
-                             (Some old_manifest)))
+                      (match check_manifest_scope config old_manifest path with
+                       | Error diagnostics -> report (base_diags () @ diagnostics)
+                       | Ok () ->
+                         finish_check output_root start_snapshot
+                           (warnings @ base_diags ()
+                            @ compare_states config.Config.directory expecteds
+                                (Some old_manifest))))
                  | None ->
                    finish_check output_root start_snapshot
                      (warnings @ base_diags ()
-                      @ compare_states output_root expecteds None))))))
+                      @ compare_states config.Config.directory expecteds None))))))
 
 (* ── transactional build ── *)
 
-let read_old_manifest output_root =
-  let path = manifest_path output_root in
+(* The bytes are carried out beside the manifest they decode to: reading one
+   written in an older format lifts its paths, so what is on disk is no longer
+   what re-encoding the manifest gives, and the transaction's precondition is
+   about the bytes. *)
+let read_old_manifest config =
+  let path = manifest_path (snd config.Config.output_root) in
   if not (Sys.file_exists path) then Ok None
   else
     match read_file path with
     | Error diagnostics -> Error diagnostics
     | Ok bytes ->
-      (match Manifest.decode ~path bytes with
-       | Ok manifest -> Ok (Some manifest)
+      (match
+         Manifest.decode ~output_root:(fst config.Config.output_root) ~path bytes
+       with
+       | Ok manifest ->
+         let* () = check_manifest_scope config manifest path in
+         Ok (Some (manifest, sha256 bytes))
        | Error diagnostics -> Error diagnostics)
 
 (* Before any staging: every file named by the old manifest must still match
    its recorded hash (TM302 modified otherwise), and an expected output not
    named by the old manifest must not collide with an existing file (TM304). *)
-let verify_managed output_root old_manifest expecteds =
+let verify_managed content_root old_manifest expecteds =
   let managed_by_output =
     match old_manifest with
     | None -> String_map.empty
@@ -396,9 +439,9 @@ let verify_managed output_root old_manifest expecteds =
           | Error _ -> acc
           | Ok () ->
             let abs =
-              Filename.concat output_root (Path_safe.to_string entry.output)
+              Filename.concat content_root (Path_safe.to_string entry.output)
             in
-            (match observe output_root entry.Manifest.output with
+            (match observe content_root entry.Manifest.output with
              | Error diagnostics -> Error diagnostics
              | Ok Missing -> Ok ()
              | Ok Other ->
@@ -423,8 +466,8 @@ let verify_managed output_root old_manifest expecteds =
         let output = Path_safe.to_string e.output_relative in
         if String_map.mem output managed_by_output then Ok ()
         else
-          let abs = Filename.concat output_root output in
-          match observe output_root e.output_relative with
+          let abs = Filename.concat content_root output in
+          match observe content_root e.output_relative with
           | Error diagnostics -> Error diagnostics
           | Ok Missing -> Ok ()
           | Ok (Regular _) | Ok Other ->
@@ -515,19 +558,20 @@ let write_staged_atomic temp_abs output_abs bytes =
    content. The output's parent directory is created (with symlink refusal
    and parent fsync) before the rename, so a manually removed parent subtree
    is rebuilt, mirroring Ensure_parent semantics. *)
-let restore_missing_atomic output_root txn_dir (entry : Manifest.entry) bytes =
+let restore_missing_atomic ~state_root ~content_root txn_dir
+    (entry : Manifest.entry) bytes =
   let output_abs =
-    Filename.concat output_root (Path_safe.to_string entry.Manifest.output)
+    Filename.concat content_root (Path_safe.to_string entry.Manifest.output)
   in
   let temp_rel =
     Path_safe.append txn_dir
       (relative (Path_safe.to_string entry.Manifest.output ^ ".restore"))
   in
-  let temp_abs = Filename.concat output_root (Path_safe.to_string temp_rel) in
-  let* () = mkdir_p_checked output_root (Filename.dirname temp_abs) in
-  (* the root-level output parent is the output root itself and already
+  let temp_abs = Filename.concat state_root (Path_safe.to_string temp_rel) in
+  let* () = mkdir_p_checked state_root (Filename.dirname temp_abs) in
+  (* the root-level output parent is the content root itself and already
      exists; any deeper parent is created safely before the rename *)
-  let* () = mkdir_p_checked output_root (Filename.dirname output_abs) in
+  let* () = mkdir_p_checked content_root (Filename.dirname output_abs) in
   write_staged_atomic temp_abs output_abs bytes
 
 (* A managed output that is absent while its manifest content is unchanged is
@@ -536,8 +580,8 @@ let restore_missing_atomic output_root txn_dir (entry : Manifest.entry) bytes =
    misread as a completed transaction. The restore keeps the workspace
    consistent without a journal because each file appears atomically and the
    manifest never changes. *)
-let restore_unchanged_missing output_root txn_dir old_manifest pure_ops
-    bytes_by_output =
+let restore_unchanged_missing ~state_root ~content_root txn_dir old_manifest
+    pure_ops bytes_by_output =
   match old_manifest with
   | None -> Ok []
   | Some _ ->
@@ -550,7 +594,7 @@ let restore_unchanged_missing output_root txn_dir old_manifest pure_ops
           | Ok () ->
             (match op with
              | Manifest.Unchanged entry ->
-               (match observe output_root entry.Manifest.output with
+               (match observe content_root entry.Manifest.output with
                 | Ok Missing ->
                   restores := entry :: !restores;
                   Ok ()
@@ -569,7 +613,7 @@ let restore_unchanged_missing output_root txn_dir old_manifest pure_ops
               Hashtbl.find bytes_by_output
                 (Path_safe.to_string entry.Manifest.output)
             in
-            restore_missing_atomic output_root txn_dir entry bytes)
+            restore_missing_atomic ~state_root ~content_root txn_dir entry bytes)
         (Ok ()) (List.rev !restores)
     in
     Ok (List.rev !restores)
@@ -577,7 +621,7 @@ let restore_unchanged_missing output_root txn_dir old_manifest pure_ops
 (* The old manifest was just verified, so an unchanged entry is still present
    with its recorded hash (a no-op) once missing ones are restored; a
    replaced entry whose old file is gone becomes a create. *)
-let postprocess output_root ops =
+let postprocess content_root ops =
   List.fold_left
     (fun acc op ->
       match acc with
@@ -585,20 +629,20 @@ let postprocess output_root ops =
       | Ok ops ->
         (match op with
          | Manifest.Unchanged entry ->
-           (match observe output_root entry.Manifest.output with
+           (match observe content_root entry.Manifest.output with
             | Ok (Regular hash) when hash = entry.Manifest.sha256 ->
               Ok (Manifest.Unchanged entry :: ops)
             | Ok _ -> Ok (Manifest.Create entry :: ops)
             | Error diagnostics -> Error diagnostics)
          | Manifest.Replace { old_entry; new_entry } ->
-           (match observe output_root new_entry.Manifest.output with
+           (match observe content_root new_entry.Manifest.output with
             | Ok (Regular hash) when hash = old_entry.Manifest.sha256 ->
               Ok (Manifest.Replace { old_entry; new_entry } :: ops)
             | Ok Missing -> Ok (Manifest.Create new_entry :: ops)
             | Ok (Regular _) | Ok Other ->
               Error
                 [ tm
-                    (Filename.concat output_root
+                    (Filename.concat content_root
                        (Path_safe.to_string new_entry.output))
                     TM500
                     "internal: replace output changed between verification \
@@ -620,28 +664,32 @@ let expected_bytes expecteds =
     expecteds;
   table
 
-let journal_paths (transaction : Transaction.t) =
+(* A journal names two kinds of path: the outputs, which are below the
+   content root, and the staged temporaries, which are compiler state below
+   the output root. They are observed against their own root. *)
+let journal_outputs (transaction : Transaction.t) =
+  List.map
+    (fun (op : Transaction.operation) -> op.Transaction.output)
+    transaction.Transaction.operations
+
+let journal_temporaries (transaction : Transaction.t) =
   transaction.Transaction.new_manifest_temporary
-  :: List.concat_map
-       (fun (op : Transaction.operation) ->
-         op.Transaction.output
-         :: (match op.Transaction.temporary with
-             | Some temporary -> [ temporary ]
-             | None -> []))
+  :: List.filter_map
+       (fun (op : Transaction.operation) -> op.Transaction.temporary)
        transaction.Transaction.operations
 
-let plan_execute output_root transaction =
-  let* observed = observers output_root (journal_paths transaction) in
+let plan_execute ~state_root ~content_root transaction =
+  let* output = observers content_root (journal_outputs transaction) in
+  let* temporary = observers state_root (journal_temporaries transaction) in
   let* current_manifest =
-    let path = manifest_path output_root in
+    let path = manifest_path state_root in
     if Sys.file_exists path then
       match read_file path with
       | Ok bytes -> Ok (Transaction.Hash (Manifest.sha256 bytes))
       | Error diagnostics -> Error diagnostics
     else Ok Transaction.Missing
   in
-  Transaction.roll_forward transaction ~current_manifest
-    ~output:observed ~temporary:observed
+  Transaction.roll_forward transaction ~current_manifest ~output ~temporary
 
 (* Summary counts are derived from the executed transaction only after the
    journal has been removed; outputs restored before staging and outputs kept
@@ -666,20 +714,23 @@ let count_summary (transaction : Transaction.t) expected_count ~restored =
 
 let normal_build config expecteds =
   let output_root = snd config.Config.output_root in
-  let* old_manifest = read_old_manifest output_root in
-  let* () = verify_managed output_root old_manifest expecteds in
+  let content_root = config.Config.directory in
+  let* loaded = read_old_manifest config in
+  let old_manifest = Option.map fst loaded in
+  let base_manifest_sha256 = Option.map snd loaded in
+  let* () = verify_managed content_root old_manifest expecteds in
   let next_manifest = Manifest.of_expected expecteds in
   let txn_id = transaction_id next_manifest in
   let txn_dir = relative (".tree-md-stage/" ^ txn_id) in
   let bytes_by_output = expected_bytes expecteds in
   let pure_ops = Manifest.diff ~old:old_manifest ~next:next_manifest in
   let* restored =
-    restore_unchanged_missing output_root txn_dir old_manifest pure_ops
-      bytes_by_output
+    restore_unchanged_missing ~state_root:output_root ~content_root txn_dir
+      old_manifest pure_ops bytes_by_output
   in
-  let* ops = postprocess output_root pure_ops in
+  let* ops = postprocess content_root pure_ops in
   let transaction =
-    Transaction.create ~transaction_id:txn_id
+    Transaction.create ?base_manifest_sha256 ~transaction_id:txn_id
       ~old_manifest ~new_manifest:next_manifest ops
   in
   let files =
@@ -698,15 +749,17 @@ let normal_build config expecteds =
     Workspace_fs.stage ~output_root ~journal:transaction ~files
       ~manifest_bytes:(Manifest.encode next_manifest) ()
   in
-  let* actions = plan_execute output_root transaction in
-  let* () = Workspace_fs.execute ~output_root actions () in
+  let* actions =
+    plan_execute ~state_root:output_root ~content_root transaction
+  in
+  let* () = Workspace_fs.execute ~output_root ~content_root actions () in
   Ok
     (count_summary transaction (List.length expecteds)
        ~restored:(List.length restored))
 
 (* ── recovery under the writer lock ── *)
 
-let recover output_root =
+let recover ~output_root ~content_root =
   match Workspace_fs.snapshot ~output_root with
   | Error diagnostics -> Error diagnostics
   | Ok snap ->
@@ -722,12 +775,12 @@ let recover output_root =
          | None -> Ok Transaction.Missing
          | Some bytes -> Ok (Transaction.Hash (Manifest.sha256 bytes))
        in
-       let* observed = observers output_root (journal_paths journal) in
+       let* output = observers content_root (journal_outputs journal) in
+       let* temporary = observers output_root (journal_temporaries journal) in
        let* actions =
-         Transaction.roll_forward journal ~current_manifest
-           ~output:observed ~temporary:observed
+         Transaction.roll_forward journal ~current_manifest ~output ~temporary
        in
-       Workspace_fs.execute ~output_root actions ()
+       Workspace_fs.execute ~output_root ~content_root actions ()
      | None ->
        if snap.Workspace_fs.stage_entries = [] then Ok ()
        else Workspace_fs.remove_orphan_stage ~output_root)
@@ -835,7 +888,7 @@ let build ~config_path =
             then compiles current source under the same lock. *)
          lock_and_build config (fun () ->
            match
-             (let* () = recover output_root in
+             (let* () = recover ~output_root ~content_root:config.Config.directory in
               let* forest, _discovery, warnings = compile config in
               let* summary = normal_build config forest.Compiler.outputs in
               Ok ({ summary with unpublished = forest.Compiler.unpublished },
@@ -887,7 +940,7 @@ let build ~config_path =
                      || snap.Workspace_fs.stage_entries <> [] then
                     (* a concurrent writer crashed while we compiled without
                        the lock: recover before compiling current source *)
-                    (let* () = recover output_root in
+                    (let* () = recover ~output_root ~content_root:config.Config.directory in
                      let* forest, _discovery, warnings = compile config in
                      let* summary = normal_build config forest.Compiler.outputs in
                      Ok ({ summary with unpublished = forest.Compiler.unpublished },

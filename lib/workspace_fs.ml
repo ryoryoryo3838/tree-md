@@ -387,9 +387,20 @@ let same_filesystem a b =
     sa.Unix.st_dev = sb.Unix.st_dev
   with Unix.Unix_error _ -> false
 
-let execute ?(inject = fun (_ : fault_point) -> ()) ~output_root actions () =
+(* [output_root] holds the compiler's own state — the journal, the staged
+   temporaries and the manifest — and [content_root] is what the managed
+   paths are named below. They are the same directory for a forest whose
+   outputs are all trees; `[assets].into` is what separates them, because an
+   attachment has to land under an asset root, which the output root is not. *)
+let execute ?(inject = fun (_ : fault_point) -> ()) ~output_root ?content_root
+    actions () =
+  let content_root = Option.value content_root ~default:output_root in
   try
   let* () = check_output_root output_root in
+  let* () =
+    if content_root = output_root then Ok ()
+    else check_no_symlinks_abs content_root "content root"
+  in
   let journal_abs = journal_path output_root in
   if not (Sys.file_exists journal_abs) then
     fail_tm404 journal_abs "journal is missing"
@@ -401,11 +412,11 @@ let execute ?(inject = fun (_ : fault_point) -> ()) ~output_root actions () =
       | action :: rest ->
         match action with
         | Transaction.Ensure_parent parent ->
-          let parent_abs = Filename.concat output_root (Path_safe.to_string parent) in
-          begin match check_path_within output_root parent "output parent" with
+          let parent_abs = Filename.concat content_root (Path_safe.to_string parent) in
+          begin match check_path_within content_root parent "output parent" with
           | Error e -> Error e
           | Ok () ->
-            (try mkdir_p_checked output_root parent_abs; Ok ()
+            (try mkdir_p_checked content_root parent_abs; Ok ()
              with Unix.Unix_error (err, _, _) ->
                fail_tm404 parent_abs (Printf.sprintf "cannot create parent: %s" (Unix.error_message err)))
             |> function
@@ -414,7 +425,7 @@ let execute ?(inject = fun (_ : fault_point) -> ()) ~output_root actions () =
           end
         | Transaction.Install_output { temporary; output; sha256 } ->
           let temp_abs = Filename.concat output_root (Path_safe.to_string temporary) in
-          let output_abs = Filename.concat output_root (Path_safe.to_string output) in
+          let output_abs = Filename.concat content_root (Path_safe.to_string output) in
           if not (Sys.file_exists temp_abs) then
             fail_tm404 temp_abs "temporary file missing"
           else begin
@@ -425,13 +436,13 @@ let execute ?(inject = fun (_ : fault_point) -> ()) ~output_root actions () =
                 fail_tm404 temp_abs
                   (Printf.sprintf "temporary sha256 mismatch: expected %s, got %s" sha256 actual)
               else begin
-                match check_path_within output_root output "output file" with
+                match check_path_within content_root output "output file" with
                 | Error e -> Error e
                 | Ok () ->
                   if not (same_filesystem temp_abs (Filename.dirname output_abs)) then
                     fail_tm404 temp_abs "cannot rename across filesystems"
                   else begin
-                    mkdir_parent output_root output_abs;
+                    mkdir_parent content_root output_abs;
                     (try Unix.rename temp_abs output_abs; Ok ()
                      with Unix.Unix_error (err, _, _) ->
                        fail_tm404 temp_abs (Printf.sprintf "rename failed: %s" (Unix.error_message err)))
@@ -448,8 +459,8 @@ let execute ?(inject = fun (_ : fault_point) -> ()) ~output_root actions () =
               end
           end
         | Transaction.Delete_output { output; old_sha256 } ->
-          let output_abs = Filename.concat output_root (Path_safe.to_string output) in
-          begin match check_path_within output_root output "output file" with
+          let output_abs = Filename.concat content_root (Path_safe.to_string output) in
+          begin match check_path_within content_root output "output file" with
           | Error e -> Error e
           | Ok () ->
             if Sys.file_exists output_abs then begin

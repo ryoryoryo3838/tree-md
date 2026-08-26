@@ -37,6 +37,12 @@ let default_id_policy = {
   mint = By_build;
 }
 
+type attachments = {
+  config_relative : Path_safe.relative;
+  directory : string;
+  route_prefix : string;
+}
+
 type t = {
   path : string;
   directory : string;
@@ -46,6 +52,7 @@ type t = {
   target : string;
   id : id_policy;
   publish_from : string list;
+  attachments : attachments option;
 }
 
 let ( let* ) = Result.bind
@@ -222,6 +229,57 @@ let publish_from path fields =
      | Some _ -> diagnostic path "publish.from must be an array of strings")
   | Some _ -> diagnostic path "publish must be a table"
 
+(* `[assets].into` names where an attachment a published tree reached is
+   copied to. A vault keeps its attachments beside its notes, and the site
+   keeps its assets where `forest.toml` says; a note embedding `![[x.png]]`
+   is asking for a file that is in the first place and has to be in the
+   second before Forester can serve it.
+
+   The destination has to sit under a declared asset root, because a route is
+   only a path Forester planted an asset at, and it must not sit under a
+   source root or the output root, which belong to other owners: a source
+   root is the writer's, and the output root is where the trees go. *)
+let attachments path fields ~directory ~forest ~source_roots ~output_root =
+  match List.assoc_opt "assets" fields with
+  | None -> Ok None
+  | Some (Otoml.TomlTable assets_fields | Otoml.TomlInlineTable assets_fields) ->
+    let* () = check_closed path [ "into" ] assets_fields in
+    (match List.assoc_opt "into" assets_fields with
+     | None -> diagnostic path "assets.into is required when [assets] is present"
+     | Some (Otoml.TomlString "") -> diagnostic path "assets.into may not be empty"
+     | Some (Otoml.TomlString value) ->
+       let* config_relative = relative_field path "assets.into" value in
+       let absolute = Path_safe.resolve ~base:directory config_relative in
+       let containing =
+         List.filter
+           (fun (_, root) -> Path_safe.is_within ~root absolute)
+           forest.asset_roots
+       in
+       (match containing with
+        | [] ->
+          diagnostic path
+            "assets.into is not inside any directory named by forest.assets, \
+             so Forester would never plant what is copied there"
+        | _ :: _ :: _ ->
+          diagnostic path "assets.into is inside more than one forest.assets root"
+        | [ _ ] ->
+          if List.exists (fun (_, source) -> overlaps source absolute) source_roots
+          then diagnostic path "assets.into overlaps a source root"
+          else if overlaps (snd output_root) absolute then
+            diagnostic path "assets.into overlaps the output root"
+          else
+            let route_prefix =
+              let root = forest.directory in
+              if absolute = root then ""
+              else
+                String.sub absolute
+                  (String.length root + 1)
+                  (String.length absolute - String.length root - 1)
+            in
+            Ok (Some { config_relative; directory = absolute; route_prefix }))
+     | Some _ -> diagnostic path "assets.into must be a string")
+  | Some _ -> diagnostic path "assets must be a table"
+
 let id_policy path fields =
   match List.assoc_opt "id" fields with
   | None -> Ok default_id_policy
@@ -288,7 +346,8 @@ let load ~path =
   let* fields = table_fields path value in
   let* () =
     check_closed path
-      ["version"; "forest"; "sources"; "output"; "target"; "id"; "publish"] fields
+      [ "version"; "forest"; "sources"; "output"; "target"; "id"; "publish";
+        "assets" ] fields
   in
   let* version = require_field path "version" fields in
   let* () =
@@ -326,6 +385,9 @@ let load ~path =
   let* publish_from = publish_from path fields in
   let* forest = load_forest forest_path in
   let* () = check_output_tree path (snd output_root) forest.tree_roots in
+  let* attachments =
+    attachments path fields ~directory ~forest ~source_roots ~output_root
+  in
   Ok {
     path = absolute_path;
     directory;
@@ -335,4 +397,5 @@ let load ~path =
     target;
     id;
     publish_from;
+    attachments;
   }

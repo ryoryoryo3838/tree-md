@@ -234,6 +234,10 @@ plus the `test/fixtures/compat` fixture.
 | --- | --- |
 | Scheme allowlist (`http`, `https`, `mailto`, fragments, safe relative); `javascript`/`data` rejected | `inline_test.ml` (`uri_mailto_accepted`, `uri_fragment_accepted`, `uri_relative_accepted`, `uri_javascript_rejected`, `uri_data_image_rejected`, `parse_link_javascript_rejected`, `parse_image_data_rejected`, `uri_nul_rejected`); `TM205` |
 | External images only `http`/`https`; local assets resolve to exactly one asset root | `forest_index_test.ml` (`assets`, `single_match_routes`); `cli.t/run.t` (`TM203`, `TM204`); `TM205` |
+| An attachment a published tree embeds is copied to `[assets].into`, keeping its path below its source root, and routed there | `config_test.ml` (`assets`); `discovery_test.ml` (`attachments_discovered`, `hidden_attachments_skipped`); `forest_index_test.ml` (`attachments`); `workspace_test.ml` (`attachments`) |
+| An asset root answers before the vault, and a copy already made is not an asset to find | `forest_index_test.ml` (`asset_root_wins`, `previous_copy_ignored`); `workspace_test.ml` (`embedded_attachment_copied`) |
+| Without `[assets].into` nothing is copied, and `TM203` says where the file is | `forest_index_test.ml` (`no_destination_tm203`) |
+| `[assets].into` must sit under a `forest.assets` root and over neither a source root nor the output root | `config_test.ml` (`into_under_an_asset_root`, `into_not_over_a_source_root`, `into_not_over_the_output_root`, `assets_key_set_is_closed`) |
 | An asset is looked up as written, not percent-encoded, so a non-ASCII or spaced name resolves | `forest_index_test.ml` (`nonascii_asset_resolves`, `spaced_asset_resolves`); `inline_test.ml` (`uri_percent_encode_space` asserts both spellings) |
 | Asset traversal rejection (`/`, `\`, NUL, empty, `.`, `..` segments) | `config_test.ml` (`relative_rejects_unsafe_paths`, `absolute_path`, `empty_segment`, `dot_segment`, `dot_dot_segment`, `backslash_path`) |
 | Output paths confined under the output root | `manifest_test.ml` (path checks); `workspace_fs_test.ml` (`symlink_refusal`) |
@@ -242,8 +246,9 @@ plus the `test/fixtures/compat` fixture.
 
 | Requirement | Test |
 | --- | --- |
-| Manifest schema (format 1, compiler 0.1.0, target, files, sorted entries, 64-hex SHA-256) | `manifest_test.ml` (`canonical_schema`, `canonical_empty`, `canonical_sorted_entries`, `round_trip`, `decode_sorts`); `TM402` |
-| Malformed JSON / unknown fields / wrong types / duplicate / bad hash / non-normalized paths rejected | `manifest_test.ml` (`malformed_json`, `unknown_field`, `entry_unknown_field`, `duplicate_field`, `duplicate_source`, `duplicate_output`, `short_hash`, `uppercase_hash`, `hash_wrong_type`, `non_tree_md_source`, `non_tree_output`, `absolute_path`, `dot_and_dotdot_path`, `tree_md_component`); `TM402` |
+| Manifest schema (format 2, compiler 0.1.0, target, files, sorted entries, 64-hex SHA-256) | `manifest_test.ml` (`canonical_schema`, `canonical_empty`, `canonical_sorted_entries`, `round_trip`, `decode_sorts`); `TM402` |
+| Every managed path is relative to the configuration's own directory, so one manifest owns trees and attachment copies; a format 1 manifest is lifted, not rejected | `manifest_test.ml` (`formats`, `attachment_entry`, `format_1_lifted`); `workspace_test.ml` (`attachments`) |
+| Malformed JSON / unknown fields / wrong types / duplicate / bad hash / non-normalized paths rejected | `manifest_test.ml` (`malformed_json`, `unknown_field`, `entry_unknown_field`, `duplicate_field`, `duplicate_source`, `duplicate_output`, `short_hash`, `uppercase_hash`, `hash_wrong_type`, `format_3`, `absolute_path`, `dot_and_dotdot_path`, `tree_md_component`); `TM402` |
 | Output-root reserved names (`manifest`, `transaction`, `lock`, `stage`) | `manifest_test.ml` (`tree_md_component`) |
 | Only `build` takes the exclusive lock; validation before lock | `workspace_fs_test.ml` (`lock`, `contention`, `cross_process`); `workspace_test.ml` (`build_concurrency`) |
 | `check` never creates/locks; read-only lock test; active writer → exit 2; state-digest double check | `workspace_test.ml` (`check_concurrency`, `active_writer_tm404`, `first_check_missing_no_writes`); `cli_test.ml` |

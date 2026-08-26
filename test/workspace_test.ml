@@ -284,7 +284,7 @@ let test_build_first_creates_output_and_manifest () =
     Alcotest.(check int) "one manifest entry" 1 (List.length m.Manifest.files);
     (match m.Manifest.files with
      | [ entry ] ->
-       Alcotest.(check string) "entry output" "index.tree"
+       Alcotest.(check string) "entry output" "generated/index.tree"
          (Path_safe.to_string entry.Manifest.output);
        Alcotest.(check string) "entry source" "trees-md/index.tree.md"
          (Path_safe.to_string entry.Manifest.source);
@@ -511,6 +511,88 @@ let test_build_active_writer () =
       let _ = Unix.write parent_wr (Bytes.of_string "x") 0 1 in
       ignore (Unix.waitpid [] child_pid))
 
+(* ── attachments: a file the vault keeps beside its notes ── *)
+
+let attachment_source ws = Filename.concat ws "trees-md/DAILY/assets/cat.png"
+let attachment_copy ws = Filename.concat ws "assets/vault/DAILY/assets/cat.png"
+
+let with_attachment_workspace f =
+  with_workspace (fun ws ->
+    write_file (config_path ws)
+      (read_file (config_path ws) ^ "\n[assets]\ninto = \"assets/vault\"\n");
+    ensure_dir (Filename.concat ws "assets");
+    ensure_dir (Filename.concat ws "trees-md/DAILY");
+    ensure_dir (Filename.concat ws "trees-md/DAILY/assets");
+    write_file (attachment_source ws) "cat-bytes\n";
+    write_file (Filename.concat ws "trees-md/index.tree.md")
+      (golden_source ^ "\n![[cat.png]]\n");
+    f ws)
+
+let test_build_copies_an_embedded_attachment () =
+  with_attachment_workspace (fun ws ->
+    let r = expect_ok "first build" (Workspace.build ~config_path:(config_path ws)) in
+    Alcotest.(check (list int)) "the tree and the attachment" [2; 0; 0; 0]
+      (counts r);
+    Alcotest.(check bool) "the copy is under the asset root" true
+      (exists (attachment_copy ws));
+    Alcotest.(check string) "byte for byte" (read_file (attachment_source ws))
+      (read_file (attachment_copy ws));
+    Alcotest.(check bool) "routed at the copy" true
+      (let contains haystack needle =
+         let n = String.length needle in
+         let rec loop i =
+           i + n <= String.length haystack
+           && (String.sub haystack i n = needle || loop (i + 1))
+         in
+         loop 0
+       in
+       contains (read_file (output_file ws))
+         "\\route-asset{assets/vault/DAILY/assets/cat.png}");
+    let m = decode_manifest ws in
+    Alcotest.(check (list string)) "the copy is manifest-owned"
+      [ "assets/vault/DAILY/assets/cat.png"; "generated/index.tree" ]
+      (List.map
+         (fun (e : Manifest.entry) -> Path_safe.to_string e.Manifest.output)
+         m.Manifest.files);
+    (* The copy sits under an asset root, where a build's own asset lookup
+       would otherwise find it and conclude nothing needed copying. *)
+    let again = expect_ok "second build" (Workspace.build ~config_path:(config_path ws)) in
+    Alcotest.(check (list int)) "nothing to do" [0; 0; 0; 2] (counts again);
+    Alcotest.(check (list string)) "check is clean" []
+      (codes (Workspace.check ~config_path:(config_path ws))))
+
+let test_build_replaces_an_edited_attachment () =
+  with_attachment_workspace (fun ws ->
+    let _ = expect_ok "first build" (Workspace.build ~config_path:(config_path ws)) in
+    write_file (attachment_source ws) "cat-bytes-edited\n";
+    let r = expect_ok "second build" (Workspace.build ~config_path:(config_path ws)) in
+    Alcotest.(check (list int)) "the copy is replaced" [0; 1; 0; 1] (counts r);
+    Alcotest.(check string) "the new bytes" "cat-bytes-edited\n"
+      (read_file (attachment_copy ws)))
+
+(* Nothing embeds it any more, so the site does not carry it any more. *)
+let test_build_deletes_an_unembedded_attachment () =
+  with_attachment_workspace (fun ws ->
+    let _ = expect_ok "first build" (Workspace.build ~config_path:(config_path ws)) in
+    write_file (Filename.concat ws "trees-md/index.tree.md") golden_source;
+    let r = expect_ok "second build" (Workspace.build ~config_path:(config_path ws)) in
+    Alcotest.(check (list int)) "the copy is deleted" [0; 1; 1; 0] (counts r);
+    Alcotest.(check bool) "gone from the asset root" false
+      (exists (attachment_copy ws));
+    Alcotest.(check bool) "still in the vault" true
+      (exists (attachment_source ws)))
+
+let test_modified_copy_is_protected () =
+  with_attachment_workspace (fun ws ->
+    let _ = expect_ok "first build" (Workspace.build ~config_path:(config_path ws)) in
+    write_file (attachment_copy ws) "hand-written\n";
+    Alcotest.(check (list string)) "check reports it" [ "TM302" ]
+      (codes (Workspace.check ~config_path:(config_path ws)));
+    Alcotest.(check (list string)) "and a build refuses to overwrite it"
+      [ "TM302" ] (codes (Workspace.build ~config_path:(config_path ws)));
+    Alcotest.(check string) "the hand-written file is left alone"
+      "hand-written\n" (read_file (attachment_copy ws)))
+
 let () =
   let open Alcotest in
   run "Workspace"
@@ -544,6 +626,15 @@ let () =
         test_case "interrupted_journal_roll_forward" `Quick test_build_interrupted_journal_roll_forward;
         test_case "source_error_leaves_output_unchanged" `Quick test_build_source_error_leaves_output_unchanged;
         test_case "config_error_no_writes" `Quick test_build_config_error_no_writes;
+      ]
+    ; "attachments", [
+        test_case "embedded_attachment_copied" `Quick
+          test_build_copies_an_embedded_attachment;
+        test_case "edited_attachment_replaced" `Quick
+          test_build_replaces_an_edited_attachment;
+        test_case "unembedded_attachment_deleted" `Quick
+          test_build_deletes_an_unembedded_attachment;
+        test_case "modified_copy_protected" `Quick test_modified_copy_is_protected;
       ]
     ; "build_concurrency", [
         test_case "active_writer_tm403" `Quick test_build_active_writer;

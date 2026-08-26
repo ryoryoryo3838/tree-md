@@ -2,8 +2,9 @@ open Tree_md
 
 (* Resolution now returns its warnings alongside the per-document results;
    these suites assert on the results. *)
-let resolve_forest forest index ~documents =
-  Result.map fst (Forest_index.resolve forest index ~documents)
+let resolve_forest ?attachments ?into forest index ~documents =
+  Result.map (fun ((results, _copies), _warnings) -> results)
+    (Forest_index.resolve ?attachments ?into forest index ~documents)
 
 let relative value =
   match Path_safe.relative value with
@@ -396,7 +397,7 @@ let test_markdown_link_unresolved_warns () =
     match Forest_index.resolve forest index ~documents:[ doc ] with
     | Error diagnostics ->
       Alcotest.fail (render_diagnostics "an unresolved link failed" diagnostics)
-    | Ok (_results, warnings) ->
+    | Ok ((_results, _copies), warnings) ->
       Alcotest.(check int) "one warning" 1 (List.length warnings);
       Alcotest.(check bool) "a warning, not an error" false
         (Diagnostic.has_error warnings))
@@ -414,7 +415,7 @@ let test_root_relative_link_is_not_a_reference () =
     match Forest_index.resolve forest index ~documents:[ doc ] with
     | Error diagnostics ->
       Alcotest.fail (render_diagnostics "a site URL was rejected" diagnostics)
-    | Ok (_results, warnings) ->
+    | Ok ((_results, _copies), warnings) ->
       Alcotest.(check int) "silent" 0 (List.length warnings))
 
 (* A relative destination that is not a note and does not resolve is left
@@ -430,7 +431,7 @@ let test_unresolved_non_note_link_is_silent () =
     match Forest_index.resolve forest index ~documents:[ doc ] with
     | Error diagnostics ->
       Alcotest.fail (render_diagnostics "a relative URL was rejected" diagnostics)
-    | Ok (_results, warnings) ->
+    | Ok ((_results, _copies), warnings) ->
       Alcotest.(check int) "silent" 0 (List.length warnings))
 
 (* A reference written in a heading used to be collected nowhere, so it was
@@ -534,6 +535,171 @@ let test_asset_single_match_routes () =
     | Error diagnostics ->
       let messages = List.map (fun d -> d.Diagnostic.message) diagnostics in
       Alcotest.fail ("single match not routed: " ^ String.concat "; " messages))
+
+(* ── attachments: what the vault keeps beside its notes ── *)
+
+let embed_doc ~root ~destination =
+  let path = Filename.concat root "trees-md/a.tree.md" in
+  parse_doc ~root_id:"a" ~path:path ("# A\n\n![[" ^ destination ^ "]]\n")
+
+let attachment ~root ~source_relative =
+  let path = Filename.concat root ("trees-md/" ^ source_relative) in
+  write_file path "image\n";
+  ({ Discovery.path;
+     config_relative = relative ("trees-md/" ^ source_relative);
+     source_relative = relative source_relative;
+     name = Filename.basename source_relative } : Discovery.attachment)
+
+let into ~root =
+  ({ Config.config_relative = relative "assets/vault";
+     directory = resolve root "assets/vault";
+     route_prefix = "assets/vault" } : Config.attachments)
+
+let expect_copies name result =
+  match result with
+  | Ok ((_results, copies), _warnings) -> copies
+  | Error diagnostics ->
+    Alcotest.fail (render_diagnostics name diagnostics)
+
+(* Obsidian writes the file name alone, wherever the attachment sits in the
+   vault. The copy keeps the path it had below its source root, so two
+   attachments with the same name in different folders stay apart. *)
+let test_attachment_named_is_copied_and_routed () =
+  with_fixture (fun root ->
+    let record = attachment ~root ~source_relative:"DAILY/assets/cat.png" in
+    let doc = embed_doc ~root ~destination:"cat.png" in
+    let index = expect_build "attachment index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match
+      Forest_index.resolve ~attachments:[ record ] ~into:(into ~root) forest
+        index ~documents:[ doc ]
+    with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "an embedded attachment failed" diagnostics)
+    | Ok ((results, copies), _warnings) ->
+      (match results with
+       | [ (_, resolution) ] ->
+         Alcotest.(check (option string)) "routed at its copy"
+           (Some "assets/vault/DAILY/assets/cat.png")
+           (Resolution.asset_route resolution (asset_span doc))
+       | _ -> Alcotest.fail "expected one per-document resolution");
+      (match copies with
+       | [ copy ] ->
+         Alcotest.(check string) "copied below the destination"
+           "assets/vault/DAILY/assets/cat.png"
+           (Path_safe.to_string copy.Forest_index.destination);
+         Alcotest.(check string) "from the file the vault holds"
+           record.Discovery.path
+           copy.Forest_index.attachment.Discovery.path
+       | _ -> Alcotest.fail "expected exactly one copy"))
+
+(* A destination with a path in it is looked for at that path below a source
+   root, which is how an embed says which of two same-named files it means. *)
+let test_attachment_path_is_copied () =
+  with_fixture (fun root ->
+    let a = attachment ~root ~source_relative:"A/dup.png" in
+    let b = attachment ~root ~source_relative:"B/dup.png" in
+    let doc = image_doc ~root ~destination:"A/dup.png" in
+    let index = expect_build "path index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    let copies =
+      expect_copies "a spelled-out attachment failed"
+        (Forest_index.resolve ~attachments:[ a; b ] ~into:(into ~root) forest
+           index ~documents:[ doc ])
+    in
+    Alcotest.(check (list string)) "only the one that was named"
+      [ "assets/vault/A/dup.png" ]
+      (List.map
+         (fun (copy : Forest_index.attachment_copy) ->
+           Path_safe.to_string copy.Forest_index.destination)
+         copies))
+
+let test_attachment_ambiguous_name () =
+  with_fixture (fun root ->
+    let a = attachment ~root ~source_relative:"A/dup.png" in
+    let b = attachment ~root ~source_relative:"B/dup.png" in
+    let doc = embed_doc ~root ~destination:"dup.png" in
+    let index = expect_build "ambiguous index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match
+      Forest_index.resolve ~attachments:[ a; b ] ~into:(into ~root) forest index
+        ~documents:[ doc ]
+    with
+    | Ok _ -> Alcotest.fail "an ambiguous attachment was published"
+    | Error diagnostics ->
+      let diag = primary_of "TM204" diagnostics in
+      Alcotest.(check bool) "message names the destination" true
+        (contains diag.Diagnostic.message "dup.png"))
+
+(* An asset the forest already keeps is published where it lies. Copying it
+   would put a second one under the destination and route to that instead. *)
+let test_asset_root_answers_before_the_vault () =
+  with_fixture (fun root ->
+    write_file (Filename.concat root "assets/images/cat.png") "kept\n";
+    let record = attachment ~root ~source_relative:"DAILY/cat.png" in
+    let doc = embed_doc ~root ~destination:"cat.png" in
+    let index = expect_build "precedence index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match
+      Forest_index.resolve ~attachments:[ record ] ~into:(into ~root) forest
+        index ~documents:[ doc ]
+    with
+    | Error diagnostics ->
+      Alcotest.fail (render_diagnostics "a kept asset failed" diagnostics)
+    | Ok ((results, copies), _warnings) ->
+      Alcotest.(check int) "nothing copied" 0 (List.length copies);
+      (match results with
+       | [ (_, resolution) ] ->
+         Alcotest.(check (option string)) "routed where it is kept"
+           (Some "assets/images/cat.png")
+           (Resolution.asset_route resolution (asset_span doc))
+       | _ -> Alcotest.fail "expected one per-document resolution"))
+
+(* A copy already made is this build's own output, not an asset the forest
+   keeps. Finding it there would mean the file no longer needed copying, and
+   the build after that would delete what this one wrote. *)
+let test_a_previous_copy_is_not_an_asset () =
+  with_fixture (fun root ->
+    write_file (Filename.concat root "assets/vault/DAILY/cat.png") "copy\n";
+    let record = attachment ~root ~source_relative:"DAILY/cat.png" in
+    let doc = embed_doc ~root ~destination:"cat.png" in
+    let index = expect_build "copy index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    let copies =
+      expect_copies "a second build refused the copy"
+        (Forest_index.resolve ~attachments:[ record ] ~into:(into ~root) forest
+           index ~documents:[ doc ])
+    in
+    Alcotest.(check (list string)) "copied again from the vault"
+      [ "assets/vault/DAILY/cat.png" ]
+      (List.map
+         (fun (copy : Forest_index.attachment_copy) ->
+           Path_safe.to_string copy.Forest_index.destination)
+         copies))
+
+(* Without a destination nothing is copied, so the asset really is missing —
+   but the file is sitting in the vault, and saying only "missing" would send
+   the writer looking for it somewhere it never was. *)
+let test_attachment_without_a_destination_says_where_it_is () =
+  with_fixture (fun root ->
+    let record = attachment ~root ~source_relative:"DAILY/cat.png" in
+    let doc = embed_doc ~root ~destination:"cat.png" in
+    let index = expect_build "no destination index" ~handwritten:[] ~generated:[ doc ] in
+    let forest = make_forest ~root ~asset_roots:["assets"] in
+    match
+      Forest_index.resolve ~attachments:[ record ] forest index ~documents:[ doc ]
+    with
+    | Ok _ -> Alcotest.fail "an attachment was published with nowhere to go"
+    | Error diagnostics ->
+      let diag = primary_of "TM203" diagnostics in
+      Alcotest.(check bool) "the note says where the file is" true
+        (List.exists
+           (fun note -> contains note "trees-md/DAILY/cat.png")
+           diag.Diagnostic.notes);
+      Alcotest.(check bool) "and what to set" true
+        (List.exists
+           (fun note -> contains note "[assets].into")
+           diag.Diagnostic.notes))
 
 let test_asset_symlink_file_escape () =
   with_fixture (fun root ->
@@ -692,7 +858,7 @@ let test_ambiguous_filename_warns_and_prefers_own_folder () =
     match Forest_index.resolve forest index ~documents with
     | Error diagnostics ->
       Alcotest.fail (render_diagnostics "repeated file name rejected" diagnostics)
-    | Ok (results, warnings) ->
+    | Ok ((results, _copies), warnings) ->
       let resolution = List.assoc "refer" results in
       Alcotest.(check (option string)) "the referring folder's own file wins"
         (Some "dupB")
@@ -956,6 +1122,16 @@ let () =
         test_case "unsafe_destination_tm205" `Quick test_asset_unsafe_destination;
         test_case "nonascii_asset_resolves" `Quick test_nonascii_asset_resolves;
         test_case "spaced_asset_resolves" `Quick test_spaced_asset_resolves;
+      ]
+    ; "attachments", [
+        test_case "named_attachment_copied" `Quick
+          test_attachment_named_is_copied_and_routed;
+        test_case "path_attachment_copied" `Quick test_attachment_path_is_copied;
+        test_case "ambiguous_name_tm204" `Quick test_attachment_ambiguous_name;
+        test_case "asset_root_wins" `Quick test_asset_root_answers_before_the_vault;
+        test_case "previous_copy_ignored" `Quick test_a_previous_copy_is_not_an_asset;
+        test_case "no_destination_tm203" `Quick
+          test_attachment_without_a_destination_says_where_it_is;
       ]
     ; "forest_wide", [
         test_case "forest_wide_resolution_ok" `Quick test_forest_wide_resolution_ok;

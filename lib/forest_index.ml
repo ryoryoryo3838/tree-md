@@ -451,11 +451,23 @@ let resolve_asset_root ~root_abs relative =
   | { Unix.st_kind = _; _ } -> Asset_missing
   | exception Unix.Unix_error _ -> Asset_missing
 
+(* What `[assets].into` names is an output directory that happens to sit
+   under an asset root, so what is in it is this build's own work rather than
+   an asset the forest keeps. Searching it would make a build depend on
+   whether the last one ran: the copy would be found where it was put, the
+   attachment would no longer need copying, and the next build would delete
+   what the one after it created. *)
+let is_published_copy ~into candidate =
+  match into with
+  | None -> false
+  | Some (into : Config.attachments) ->
+    Path_safe.is_within ~root:into.Config.directory candidate
+
 (* Obsidian embeds an attachment by its file name, wherever it lives in the
    vault: `![[diagram.png]]`, not `![[assets/images/diagram.png]]`. A name that
    carries no separator is therefore searched for under the asset roots. Built
    once per resolve, because it walks them. *)
-let attachments_by_name (forest : Config.forest) =
+let attachments_by_name ~into (forest : Config.forest) =
   let table = Hashtbl.create 64 in
   let rec walk ~rel_root ~root_abs ~rel_dir =
     let dir = if rel_dir = "" then root_abs else Filename.concat root_abs rel_dir in
@@ -469,8 +481,11 @@ let attachments_by_name (forest : Config.forest) =
             let rel = if rel_dir = "" then name else rel_dir ^ "/" ^ name in
             let path = Filename.concat root_abs rel in
             match Unix.lstat path with
-            | { Unix.st_kind = Unix.S_DIR; _ } -> walk ~rel_root ~root_abs ~rel_dir:rel
-            | { Unix.st_kind = Unix.S_REG; _ } ->
+            | { Unix.st_kind = Unix.S_DIR; _ } ->
+              if is_published_copy ~into path then ()
+              else walk ~rel_root ~root_abs ~rel_dir:rel
+            | { Unix.st_kind = Unix.S_REG; _ }
+              when not (is_published_copy ~into path) ->
               let existing = Option.value ~default:[] (Hashtbl.find_opt table name) in
               Hashtbl.replace table name (existing @ [ (rel_root, rel) ])
             (* A symlink is skipped here for the same reason resolve_asset_root
@@ -485,80 +500,168 @@ let attachments_by_name (forest : Config.forest) =
     forest.Config.asset_roots;
   table
 
-let check_asset forest ~attachments (diags, resolution)
+(* A file the vault keeps beside its notes, which a published tree embedded.
+   The copy is what puts it under an asset root: that is where Forester plants
+   an asset, and a route can name nowhere else. *)
+type attachment_copy = {
+  attachment : Discovery.attachment;
+  destination : Path_safe.relative;
+}
+
+(* Obsidian writes a bare file name for an attachment and a path when it was
+   told to spell one out, so both are answered: a name is searched for by
+   name, a path by the path it was written as, below each source root. *)
+let attachment_index (records : Discovery.attachment list) =
+  let by_name = Hashtbl.create 64 and by_path = Hashtbl.create 64 in
+  List.iter
+    (fun (record : Discovery.attachment) ->
+      let add table key =
+        Hashtbl.replace table key
+          (Option.value ~default:[] (Hashtbl.find_opt table key) @ [ record ])
+      in
+      add by_name record.Discovery.name;
+      add by_path (Path_safe.to_string record.Discovery.source_relative))
+    records;
+  (by_name, by_path)
+
+let attachment_matches (by_name, by_path) destination =
+  let table = if String.contains destination '/' then by_path else by_name in
+  Option.value ~default:[] (Hashtbl.find_opt table destination)
+
+let check_asset ~into ~attachments ~sources ~claimed ~forest_asset_roots
+    (diags, resolution, copies)
     (asset : Parsed_document.local_asset) =
   let destination = asset.destination in
   let location = Span.Source_span asset.span in
+  let error code message =
+    (Diagnostic.make code location message :: diags, resolution, copies)
+  in
+  let route routed =
+    (diags, Resolution.add_asset asset.span ~routed_path:routed resolution,
+     copies)
+  in
+  (* An attachment the vault keeps beside its notes: found under a source
+     root, published by being copied to where `[assets].into` says. Without
+     that table nothing is copied anywhere, so the file is still missing from
+     the forest — but saying only that would send the writer looking for a
+     file that is sitting right there. *)
+  let publish (record : Discovery.attachment) =
+    match into with
+    | None ->
+      (Diagnostic.make TM203 location ("missing asset \"" ^ destination ^ "\"")
+         ~notes:
+           [ "the vault keeps it at "
+             ^ Path_safe.to_string record.Discovery.config_relative
+             ^ ", which is not under an asset root; `[assets].into` in \
+                tree-md.toml says where an attachment a published tree \
+                embeds is copied to" ]
+       :: diags, resolution, copies)
+    | Some (into : Config.attachments) ->
+      let destination_path =
+        Path_safe.append into.Config.config_relative
+          record.Discovery.source_relative
+      in
+      let routed =
+        into.Config.route_prefix ^ "/"
+        ^ Path_safe.to_string record.Discovery.source_relative
+      in
+      let key = Path_safe.to_string destination_path in
+      (match Hashtbl.find_opt claimed key with
+       | Some (other : Discovery.attachment)
+         when other.Discovery.path <> record.Discovery.path ->
+         (* Two source roots holding the same relative path would be copied
+            onto one file, and whichever was written second would win. *)
+         error TM204
+           ("ambiguous asset \"" ^ destination ^ "\": "
+            ^ Path_safe.to_string record.Discovery.config_relative ^ " and "
+            ^ Path_safe.to_string other.Discovery.config_relative
+            ^ " are both published at " ^ key)
+       | Some _ -> route routed
+       | None ->
+         Hashtbl.replace claimed key record;
+         (diags,
+          Resolution.add_asset asset.span ~routed_path:routed resolution,
+          { attachment = record; destination = destination_path } :: copies))
+  in
+  let from_sources () =
+    match attachment_matches sources destination with
+    | [ record ] -> publish record
+    | _ :: _ :: _ as found ->
+      error TM204
+        ("ambiguous asset \"" ^ destination ^ "\" (matches "
+         ^ string_of_int (List.length found)
+         ^ " files under the source roots); write the path to say which one \
+            you mean")
+    | [] -> error TM203 ("missing asset \"" ^ destination ^ "\"")
+  in
   match Path_safe.relative destination with
   | Error message ->
-    (Diagnostic.make TM205 location
-       ("unsafe asset path \"" ^ destination ^ "\": " ^ message)
-     :: diags, resolution)
+    error TM205 ("unsafe asset path \"" ^ destination ^ "\": " ^ message)
   | Ok relative ->
     if has_hidden_component destination then
-      (Diagnostic.make TM205 location
-         ("unsafe asset path \"" ^ destination ^ "\" (hidden path component)")
-       :: diags, resolution)
+      error TM205
+        ("unsafe asset path \"" ^ destination ^ "\" (hidden path component)")
     else
       let unsafe, matches =
         List.fold_left
           (fun (unsafe, matches) (rel_root, abs_root) ->
+            if is_published_copy ~into (Path_safe.resolve ~base:abs_root relative)
+            then (unsafe, matches)
+            else
             match resolve_asset_root ~root_abs:abs_root relative with
             | Asset_regular -> (unsafe, rel_root :: matches)
             | Asset_unsafe reason -> (reason :: unsafe, matches)
             | Asset_missing -> (unsafe, matches))
-          ([], []) forest.Config.asset_roots
+          ([], []) forest_asset_roots
       in
       if unsafe <> [] then
         let reasons = String.concat "; " (List.rev unsafe) in
-        (Diagnostic.make TM205 location
-           ("unsafe asset path \"" ^ destination ^ "\" (" ^ reasons ^ ")")
-         :: diags, resolution)
+        error TM205
+          ("unsafe asset path \"" ^ destination ^ "\" (" ^ reasons ^ ")")
       else
         match List.rev matches with
         | [] when not (String.contains destination '/') -> (
-          (* A bare file name is what Obsidian writes for an attachment. *)
+          (* A bare file name is what Obsidian writes for an attachment. An
+             asset root answers first: a file already kept where the forest
+             keeps its assets is published where it lies, and needs no copy. *)
           match Hashtbl.find_opt (Lazy.force attachments) destination with
           | Some [ (rel_root, relative_path) ] ->
-            let routed = rel_root ^ "/" ^ relative_path in
-            (diags, Resolution.add_asset asset.span ~routed_path:routed resolution)
+            route (rel_root ^ "/" ^ relative_path)
           | Some (_ :: _ :: _ as found) ->
-            (Diagnostic.make TM204 location
-               ("ambiguous asset \"" ^ destination ^ "\" (matches "
-                ^ string_of_int (List.length found) ^ " files under the asset \
-                   roots); write the path to say which one you mean")
-             :: diags, resolution)
-          | Some [] | None ->
-            (Diagnostic.make TM203 location
-               ("missing asset \"" ^ destination ^ "\"")
-             :: diags, resolution))
-        | [] ->
-          (Diagnostic.make TM203 location
-             ("missing asset \"" ^ destination ^ "\"")
-           :: diags, resolution)
+            error TM204
+              ("ambiguous asset \"" ^ destination ^ "\" (matches "
+               ^ string_of_int (List.length found) ^ " files under the asset \
+                  roots); write the path to say which one you mean")
+          | Some [] | None -> from_sources ())
+        | [] -> from_sources ()
         | [ rel_root ] ->
-          let routed = Path_safe.to_string rel_root ^ "/" ^ destination in
-          (diags, Resolution.add_asset asset.span ~routed_path:routed resolution)
+          route (Path_safe.to_string rel_root ^ "/" ^ destination)
         | _ ->
-          (Diagnostic.make TM204 location
-             ("ambiguous asset \"" ^ destination
-              ^ "\" (matches multiple asset roots)")
-           :: diags, resolution)
+          error TM204
+            ("ambiguous asset \"" ^ destination
+             ^ "\" (matches multiple asset roots)")
 
 (* Warnings ride along with the resolutions; only an error discards them. *)
-let resolve forest index ~documents =
-  let attachments = lazy (attachments_by_name forest) in
-  let diags, results =
-    List.fold_left (fun (diags, results) (doc : Parsed_document.t) ->
+let resolve ?(attachments = []) ?into forest index ~documents =
+  let by_name = lazy (attachments_by_name ~into forest) in
+  let sources = attachment_index attachments in
+  let claimed = Hashtbl.create 16 in
+  let diags, copies, results =
+    List.fold_left (fun (diags, copies, results) (doc : Parsed_document.t) ->
       let diags, resolution =
         check_references index doc (diags, Resolution.empty)
       in
-      let diags, resolution =
-        List.fold_left (check_asset forest ~attachments) (diags, resolution)
+      let diags, resolution, copies =
+        List.fold_left
+          (check_asset ~into ~attachments:by_name ~sources ~claimed
+             ~forest_asset_roots:forest.Config.asset_roots)
+          (diags, resolution, copies)
           doc.Parsed_document.local_assets
       in
-      (diags,
+      (diags, copies,
        (doc.Parsed_document.outline.Outline.root_id, resolution) :: results)
-    ) ([], []) documents
+    ) ([], [], []) documents
   in
-  Diagnostic.gate (List.rev results) (List.sort Diagnostic.compare diags)
+  Diagnostic.gate
+    (List.rev results, List.rev copies)
+    (List.sort Diagnostic.compare diags)

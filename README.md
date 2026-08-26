@@ -725,6 +725,58 @@ Obsidian writes just the file name, so a destination carrying no `/` is
 searched for **by name** under the asset roots. Exactly one file must answer to
 it: none is `TM203`, several is `TM204` and says to write the path instead.
 
+### Publishing an attachment from the vault
+
+A vault keeps its attachments beside its notes — `DAILY/assets/CYCL-01.jpg`,
+not `assets/images/CYCL-01.jpg` — and Forester serves an asset only from a
+directory `forest.toml` names. `[assets].into` says where an attachment a
+published tree embeds is copied to, so the file can stay where Obsidian put
+it:
+
+```toml
+[assets]
+# Under a directory named by [forest].assets, and not over a source root or
+# the output root.
+into = "assets/vault"
+```
+
+The copy keeps the path the attachment had below its source root, so two files
+of the same name in different folders stay apart:
+
+```text
+trees-md/DAILY/assets/CYCL-01.jpg   the vault
+assets/vault/DAILY/assets/CYCL-01.jpg   the copy this build owns
+\route-asset{assets/vault/DAILY/assets/CYCL-01.jpg}   what the tree carries
+```
+
+**Only what a published tree embeds is copied.** Reachability is what publishes
+an attachment, exactly as it publishes a note: a file nothing embeds is never
+copied, and a copy nothing embeds any more is deleted on the next build. The
+copies are manifest-owned like every other generated file — hash-checked,
+restored when missing, and never overwritten by hand.
+
+An asset root answers first. A file kept where the forest keeps its assets is
+published where it lies and is never copied, and a copy already made under
+`into` is this build's own output rather than an asset to be found: without
+that, a build would depend on whether the last one ran.
+
+Without the table nothing is copied anywhere, so an embed naming a file only
+the vault holds is still `TM203` — but the diagnostic says where the file is
+and which setting carries it across, rather than sending you to look for a
+file that is sitting right there:
+
+```console
+$ tree-md build
+TM203: error: missing asset "CYCL-01.jpg"
+  --> trees-md/DAILY/CYCL.tree.md:6:1
+   |
+   | ![[CYCL-01.jpg]]
+   | ^^^^^^^^^^^^^^^^
+  note: the vault keeps it at trees-md/DAILY/assets/CYCL-01.jpg, which is not
+        under an asset root; `[assets].into` in tree-md.toml says where an
+        attachment a published tree embeds is copied to
+```
+
 ## Escaping
 
 Characters that are syntactically significant to Forester are escaped
@@ -811,10 +863,11 @@ target  = "forester-6.0-dev@30b73641cef02433ee158db6ddc77f7b49de60be"
 | `target` | Compatibility profile. Any other value is a configuration error |
 | `[id]` | Optional table; the address policy `build` mints from. See [Minting an address](#minting-an-address) |
 | `[publish]` | Optional table; which trees a build starts from. See [Publishing part of a vault](#publishing-part-of-a-vault) |
+| `[assets]` | Optional table; where an embedded attachment is copied. See [Publishing an attachment from the vault](#publishing-an-attachment-from-the-vault) |
 
-The five top-level keys are required and the key set is closed, `[id]`
-included: an unknown key is `TM401` rather than a setting that quietly does
-nothing.
+The five top-level keys are required and the key set is closed, `[id]` and
+`[assets]` included: an unknown key is `TM401` rather than a setting that
+quietly does nothing.
 
 All paths are relative to the directory containing `tree-md.toml`. The
 referenced `forest.toml` supplies `[forest].trees` and `[forest].assets`,
@@ -1018,6 +1071,13 @@ enforced rather than assumed.
   (`<output>/.tree-md-manifest.json`). An unknown file is never deleted; an
   unknown file occupying an expected output path fails the build instead of
   being overwritten.
+- **What is managed is what the manifest names.** Every path in it is written
+  relative to the directory holding `tree-md.toml`, so one manifest can own a
+  tree under the output root and a copied attachment under an asset root. It
+  never names a file under a source root, and a manifest that does is `TM402`
+  rather than a delete. A manifest written by an older `tree-md` (format 1,
+  whose outputs are named below the output root) is read and rewritten, not
+  rejected.
 - **Manual modifications are protected.** Before replacing or deleting a managed
   file, `build` verifies its current SHA-256 against the manifest. A
   hand-edited generated file is an error and is never silently overwritten.
@@ -1072,7 +1132,7 @@ rendered alongside — `TM101 (schema_additional_properties): warning: …`.
 | `TM201` | Duplicate tree identity |
 | `TM202` | Unresolved reference |
 | `TM203` | Missing asset |
-| `TM204` | Ambiguous asset (matches multiple asset roots) |
+| `TM204` | Ambiguous asset (more than one file answers to it) |
 | `TM205` | Unsafe asset or source path |
 | `TM206` | Tree has no address, and its file name cannot be one |
 | `TM301` | Missing generated output |

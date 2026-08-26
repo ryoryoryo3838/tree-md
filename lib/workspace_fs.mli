@@ -19,7 +19,11 @@ val stage :
   ?inject:(fault_point -> unit) -> output_root:string ->
   journal:Transaction.t -> files:(Path_safe.relative * string) list ->
   manifest_bytes:string -> unit -> (unit, Diagnostic.t list) result
+(* [output_root] is where the journal, the staged temporaries and the manifest
+   live; [content_root] is what a managed output path is named below, and
+   defaults to the output root. They differ when `[assets].into` puts an
+   attachment under an asset root. *)
 val execute :
-  ?inject:(fault_point -> unit) -> output_root:string ->
+  ?inject:(fault_point -> unit) -> output_root:string -> ?content_root:string ->
   Transaction.action list -> unit -> (unit, Diagnostic.t list) result
 val remove_orphan_stage : output_root:string -> (unit, Diagnostic.t list) result

@@ -86,19 +86,20 @@ let test_multi_document_forest () =
       (List.length expecteds);
     (match expecteds with
      | [ first; second ] ->
-       Alcotest.(check string) "records sorted by output path" "child.tree"
+       Alcotest.(check string) "records sorted by output path"
+         "generated/child.tree"
          (Path_safe.to_string first.output_relative);
-       Alcotest.(check string) "second output path" "index.tree"
+       Alcotest.(check string) "second output path" "generated/index.tree"
          (Path_safe.to_string second.output_relative);
        check_record first
          ~source:(Filename.concat config.Config.directory "trees-md/child.tree.md")
          ~source_config_relative:"trees-md/child.tree.md"
-         ~output_relative:"child.tree"
+         ~output_relative:"generated/child.tree"
          ~bytes:"\\title{Child}\n\\p{Child body text.}\n";
        check_record second
          ~source:(Filename.concat config.Config.directory "trees-md/index.tree.md")
          ~source_config_relative:"trees-md/index.tree.md"
-         ~output_relative:"index.tree"
+         ~output_relative:"generated/index.tree"
          ~bytes:
             "\\title{Index}\n\\date{2026-08-04}\n\\author{manual}\n\n\
              \\p{Link to [[child]].}\n\n\
@@ -160,7 +161,8 @@ let make_config ~root =
      source_roots = [ (relative "trees-md", resolve root "trees-md") ];
      output_root = (relative "generated", resolve root "generated");
      target = Forester_6.target;
-     publish_from = []; id = Config.default_id_policy }
+     publish_from = []; id = Config.default_id_policy;
+     attachments = None }
     : Config.t)
 
 let with_temp_dir f =
@@ -196,7 +198,7 @@ let test_symlinked_source_rejected () =
               source_relative = relative "linked.tree.md";
               output_relative = relative "linked.tree";
               filename = "linked" } ];
-        handwritten_roots = [] }
+        handwritten_roots = []; attachments = [] }
     in
     match compile_forest config discovery with
     | Ok _ -> Alcotest.fail "symlinked source compiled"
@@ -225,7 +227,7 @@ let test_bom_rejected () =
               source_relative = relative "bom.tree.md";
               output_relative = relative "bom.tree";
               filename = "bom" } ];
-        handwritten_roots = [] }
+        handwritten_roots = []; attachments = [] }
     in
     match compile_forest config discovery with
     | Ok _ -> Alcotest.fail "source with a UTF-8 BOM compiled"
@@ -251,7 +253,7 @@ let test_no_bom_still_compiles () =
               source_relative = relative "plain.tree.md";
               output_relative = relative "plain.tree";
               filename = "plain" } ];
-        handwritten_roots = [] }
+        handwritten_roots = []; attachments = [] }
     in
     match compile_forest config discovery with
     | Error diagnostics ->
@@ -277,7 +279,7 @@ let unaddressed_discovery root ~stem =
           source_relative = relative (stem ^ ".tree.md");
           output_relative = relative (stem ^ ".tree");
           filename = stem } ];
-    handwritten_roots = [] }
+    handwritten_roots = []; attachments = [] }
 
 let test_unaddressed_tree_tm206 () =
   with_temp_dir (fun root ->
@@ -358,7 +360,7 @@ let publish_fixture root =
         source_record root "trees-md/PUBLIC/notes.tree.md";
         source_record root "trees-md/private/frege.tree.md";
         source_record root "trees-md/DAILY/2026-08-19.tree.md" ];
-    handwritten_roots = [] }
+    handwritten_roots = []; attachments = [] }
 
 let publishing_config ~root from =
   let base = make_config ~root in
@@ -373,7 +375,8 @@ let test_publish_from_selects_and_reaches () =
       Alcotest.fail (render_diagnostics "a selective build failed" diagnostics)
     | Ok (forest, _warnings) ->
       Alcotest.(check (list string)) "the entries and what they reach"
-        [ "PUBLIC/index.tree"; "PUBLIC/notes.tree"; "private/frege.tree" ]
+        [ "generated/PUBLIC/index.tree"; "generated/PUBLIC/notes.tree";
+          "generated/private/frege.tree" ]
         (List.map
            (fun (e : Compiler.expected) -> Path_safe.to_string e.Compiler.output_relative)
            forest.Compiler.outputs
@@ -453,7 +456,7 @@ let test_publish_from_matching_nothing_is_said_out_loud () =
    pattern to blame for that. *)
 let test_publish_from_says_nothing_about_an_empty_forest () =
   with_temp_dir (fun root ->
-    let discovery = { Discovery.sources = []; handwritten_roots = [] } in
+    let discovery = { Discovery.sources = []; handwritten_roots = []; attachments = [] } in
     let config = publishing_config ~root [ "PUBLIC/**" ] in
     match Compiler.compile_forest config discovery with
     | Error diagnostics ->
@@ -482,7 +485,7 @@ let test_duplicate_identity_is_not_silently_picked () =
           [ source_record root "trees-md/PUBLIC/index.tree.md";
             source_record root "trees-md/private/frege.tree.md";
             source_record root "trees-md/private/other.tree.md" ];
-        handwritten_roots = [] }
+        handwritten_roots = []; attachments = [] }
     in
     let config = publishing_config ~root [ "PUBLIC/**" ] in
     match Compiler.compile_forest config discovery with

@@ -376,6 +376,82 @@ let test_glob_matches () =
   Alcotest.(check bool) "a prefix is not a match" false
     (matches "PUBLIC/**" "PUBLICITY/a.tree.md")
 
+(* ── `[assets].into`: where an embedded attachment is copied ── *)
+
+let expect_config name path =
+  match Config.load ~path with
+  | Ok config -> config
+  | Error diagnostics ->
+    Alcotest.fail
+      (name ^ ": " ^ String.concat "; "
+                       (List.map (fun d -> d.Diagnostic.message) diagnostics))
+
+let test_assets_absent_publishes_no_attachment () =
+  with_temp_project valid_tree_md valid_forest (fun path ->
+    let config = expect_config "valid config rejected" path in
+    Alcotest.(check bool) "no destination" true
+      (config.Config.attachments = None))
+
+(* The route a copy is emitted with is its path below the forest directory,
+   which is where Forester plants what it finds under an asset root. *)
+let test_assets_into_is_read () =
+  with_temp_project
+    (valid_tree_md ^ "\n[assets]\ninto = \"forest/assets/vault\"\n")
+    valid_forest
+    (fun path ->
+      let config = expect_config "assets table rejected" path in
+      match config.Config.attachments with
+      | None -> Alcotest.fail "the destination was dropped"
+      | Some into ->
+        Alcotest.(check string) "named as tree-md.toml writes it"
+          "forest/assets/vault"
+          (Path_safe.to_string into.Config.config_relative);
+        Alcotest.(check string) "resolved against the configuration directory"
+          (Filename.concat (Filename.dirname path) "forest/assets/vault")
+          into.Config.directory;
+        Alcotest.(check string) "routed from the forest directory"
+          "assets/vault" into.Config.route_prefix)
+
+(* A copy Forester never plants is a route to nothing, so the destination has
+   to be under a directory forest.assets names. *)
+let test_assets_into_must_be_under_an_asset_root () =
+  with_temp_project
+    (valid_tree_md ^ "\n[assets]\ninto = \"attachments\"\n")
+    valid_forest
+    (fun path -> expect_tm401 "outside the asset roots" (Config.load ~path))
+
+let test_assets_into_may_not_overlap_a_source_root () =
+  let tree_md =
+    "version = 1\n\
+     forest = \"forest/forest.toml\"\n\
+     sources = [\"forest/assets/notes\"]\n\
+     output = \"forest/generated\"\n\
+     target = \"" ^ target ^ "\"\n\n\
+     [assets]\ninto = \"forest/assets\"\n"
+  in
+  with_temp_project tree_md valid_forest (fun path ->
+    expect_tm401 "overlaps a source root" (Config.load ~path))
+
+let test_assets_into_may_not_overlap_the_output_root () =
+  let forest =
+    "[forest]\ntrees = [\"generated\", \"handwritten\"]\n\
+     assets = [\"generated\"]\n"
+  in
+  with_temp_project
+    (valid_tree_md ^ "\n[assets]\ninto = \"forest/generated/vault\"\n")
+    forest
+    (fun path -> expect_tm401 "overlaps the output root" (Config.load ~path))
+
+let test_assets_key_set_is_closed () =
+  with_temp_project
+    (valid_tree_md ^ "\n[assets]\ninto = \"forest/assets\"\nfrom = [\"x\"]\n")
+    valid_forest
+    (fun path -> expect_tm401 "unknown assets key" (Config.load ~path));
+  with_temp_project
+    (valid_tree_md ^ "\n[assets]\n")
+    valid_forest
+    (fun path -> expect_tm401 "assets table without into" (Config.load ~path))
+
 let () =
   let open Alcotest in
   run "Config"
@@ -413,5 +489,16 @@ let () =
         test_case "publish_key_set_is_closed" `Quick test_publish_key_set_is_closed;
         test_case "publish_from_must_be_strings" `Quick test_publish_from_must_be_strings;
         test_case "glob_matches" `Quick test_glob_matches;
+      ]
+    ; "assets", [
+        test_case "assets_absent" `Quick test_assets_absent_publishes_no_attachment;
+        test_case "assets_into_is_read" `Quick test_assets_into_is_read;
+        test_case "into_under_an_asset_root" `Quick
+          test_assets_into_must_be_under_an_asset_root;
+        test_case "into_not_over_a_source_root" `Quick
+          test_assets_into_may_not_overlap_a_source_root;
+        test_case "into_not_over_the_output_root" `Quick
+          test_assets_into_may_not_overlap_the_output_root;
+        test_case "assets_key_set_is_closed" `Quick test_assets_key_set_is_closed;
       ]
     ]

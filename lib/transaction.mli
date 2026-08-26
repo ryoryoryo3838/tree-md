@@ -22,7 +22,12 @@ type action =
   | Remove_stage of Path_safe.relative
   | Remove_journal
 
+(* [base_manifest_sha256] overrides the hash of the base state, for a manifest
+   whose bytes on disk are not what re-encoding it produces: one written in an
+   older format says the same thing differently, and the precondition is
+   checked against the bytes. *)
 val create :
+  ?base_manifest_sha256:string ->
   transaction_id:string -> old_manifest:Manifest.t option ->
   new_manifest:Manifest.t -> Manifest.operation list -> t
 val encode : t -> string

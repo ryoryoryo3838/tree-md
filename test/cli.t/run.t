@@ -248,11 +248,29 @@ reach comes with them. A note nobody publishes is not compiled at all, so the
 broken link in the diary does not fail the build for the pages that are.
 
   $ tree-md build --config publish/tree-md.toml
-  build: 3 created, 0 replaced, 0 deleted, 0 unchanged, 1 unpublished
+  build: 4 created, 0 replaced, 0 deleted, 0 unchanged, 1 unpublished
   $ find publish/generated -name '*.tree' | sort
   publish/generated/PUBLIC/index.tree
   publish/generated/PUBLIC/notes.tree
   publish/generated/private/frege.tree
+
+`[assets].into` says where an attachment a published tree embeds is copied to,
+so the vault can keep it beside the note. The copy keeps the path it had below
+the source root, and the tree is routed there. What is not embedded by a
+published tree is not copied: the diary's image stays in the vault.
+
+  $ find publish/assets -type f | sort
+  publish/assets/vault/PUBLIC/assets/plot.png
+  $ grep -o 'route-asset{[^}]*}' publish/generated/PUBLIC/notes.tree
+  route-asset{assets/vault/PUBLIC/assets/plot.png}
+  $ cmp publish/assets/vault/PUBLIC/assets/plot.png publish/trees-md/PUBLIC/assets/plot.png
+
+A second build has nothing to do, though the copy now sits under an asset root
+where the asset lookup would otherwise find it and conclude that nothing
+needed copying.
+
+  $ tree-md build --config publish/tree-md.toml
+  build: 0 created, 0 replaced, 0 deleted, 4 unchanged, 1 unpublished
 
 Without the table every source is published, and the draft's broken link is a
 `TM202` like any other.
@@ -277,7 +295,8 @@ look exactly like a build with nothing to do.
   TM401: warning: $TESTCASE_ROOT/publish/elsewhere.toml: publish.from matched none of the 4 sources, so nothing is published
     --> $TESTCASE_ROOT/publish/elsewhere.toml
     note: its patterns are matched against the path of a source below its source root, with the root itself spent
-  build: 0 created, 0 replaced, 3 deleted, 0 unchanged, 4 unpublished
+  build: 0 created, 0 replaced, 4 deleted, 0 unchanged, 4 unpublished
   $ find publish/generated -name '*.tree' | sort
+  $ find publish/assets -type f | sort
   $ tree-md build --config publish/tree-md.toml
-  build: 3 created, 0 replaced, 0 deleted, 0 unchanged, 1 unpublished
+  build: 4 created, 0 replaced, 0 deleted, 0 unchanged, 1 unpublished

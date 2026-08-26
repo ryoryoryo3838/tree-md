@@ -9,9 +9,17 @@ type source_file = {
 
 type handwritten_root = { id : string; path : string }
 
+type attachment = {
+  path : string;
+  config_relative : Path_safe.relative;
+  source_relative : Path_safe.relative;
+  name : string;
+}
+
 type t = {
   sources : source_file list;
   handwritten_roots : handwritten_root list;
+  attachments : attachment list;
 }
 
 let ( let* ) = Result.bind
@@ -95,6 +103,60 @@ let rec discover_files ~dir_path ~dir_rel ~suffix acc =
                   ("path changed type during scanning: " ^ Unix.error_message error) ]
     in
     loop acc entries
+
+(* Everything under a source root that is not a source. The walk mirrors
+   discover_files — no symlinks, no hidden paths, sorted entries — but says
+   nothing when a directory cannot be read: the source walk covers the same
+   trees and has already reported it.
+
+   It runs whether or not `[assets].into` is configured, because a forest
+   without it still gains by being told that the file an embed is missing is
+   sitting in the vault, unpublished, rather than nowhere at all. *)
+let rec discover_attachments ~dir_path ~dir_rel acc =
+  let entry_rel name = if dir_rel = "" then name else dir_rel ^ "/" ^ name in
+  match read_directory dir_path with
+  | Error _ -> acc
+  | Ok entries ->
+    List.fold_left
+      (fun acc name ->
+        if is_hidden name then acc
+        else
+          let entry_path = Filename.concat dir_path name in
+          match Unix.lstat entry_path with
+          | { Unix.st_kind = Unix.S_DIR; _ } ->
+            discover_attachments ~dir_path:entry_path ~dir_rel:(entry_rel name) acc
+          | { Unix.st_kind = Unix.S_REG; _ } ->
+            if has_suffix ~suffix:".tree.md" name then acc
+            else (entry_path, entry_rel name, name) :: acc
+          | { Unix.st_kind = _; _ } -> acc
+          | exception Unix.Unix_error _ -> acc)
+      acc entries
+
+let build_attachment_record root_rel (path, source_rel_string, name) =
+  match Path_safe.relative source_rel_string with
+  | Error _ -> None
+  | Ok source_relative ->
+    Some
+      { path;
+        config_relative = Path_safe.append root_rel source_relative;
+        source_relative;
+        name }
+
+let collect_attachments config =
+  let records =
+    List.fold_left
+      (fun records (root_rel, root_abs) ->
+        if has_hidden_component (Path_safe.to_string root_rel) then records
+        else
+          match Unix.lstat root_abs with
+          | { Unix.st_kind = Unix.S_DIR; _ } ->
+            let found = discover_attachments ~dir_path:root_abs ~dir_rel:"" [] in
+            List.filter_map (build_attachment_record root_rel) found @ records
+          | { Unix.st_kind = _; _ } -> records
+          | exception Unix.Unix_error _ -> records)
+      [] config.Config.source_roots
+  in
+  List.sort (fun (a : attachment) b -> String.compare a.path b.path) records
 
 let build_source_record root_rel root_abs (path, source_rel_string, stem) =
   match Path_safe.relative source_rel_string with
@@ -222,7 +284,11 @@ let scan config =
     List.sort Diagnostic.compare (sources_diags @ handwritten_diags)
   in
   if diagnostics <> [] then Error diagnostics
-  else Ok { sources; handwritten_roots = handwritten }
+  else
+    Ok
+      { sources;
+        handwritten_roots = handwritten;
+        attachments = collect_attachments config }
 
 let asset_matches forest relative =
   let path = Path_safe.to_string relative in

@@ -47,6 +47,7 @@ let make_config ~root ~sources ~tree_roots ~asset_roots ~output =
      target = Forester_6.target;
      publish_from = [];
      id = Config.default_id_policy;
+     attachments = None;
    } : Config.t)
 
 let with_fixture f =
@@ -162,6 +163,48 @@ let test_symlinks_skipped () =
       (handwritten_ids t);
     Alcotest.(check (list string)) "symlinked asset not matched" []
       (Discovery.asset_matches config.forest (relative "link.png")))
+
+(* Everything under a source root that is not a source is a candidate
+   attachment: the images and PDFs a vault keeps beside its notes. Nothing is
+   published by being found here — an embed is what reaches one. *)
+let test_attachments_are_everything_else () =
+  with_fixture (fun root ->
+    let config = standard_fixture ~root in
+    write_file (Filename.concat root "trees-md/a/assets/cat.png") "cat\n";
+    let t = expect_ok_scan "scan" (Discovery.scan config) in
+    Alcotest.(check (list string)) "sources are not attachments"
+      [ "a/assets/cat.png"; "ignored.md" ]
+      (List.map
+         (fun (a : Discovery.attachment) ->
+           Path_safe.to_string a.Discovery.source_relative)
+         t.Discovery.attachments);
+    match
+      List.find_opt
+        (fun (a : Discovery.attachment) -> a.Discovery.name = "cat.png")
+        t.Discovery.attachments
+    with
+    | None -> Alcotest.fail "the attachment was not found"
+    | Some cat ->
+      Alcotest.(check string) "path"
+        (Filename.concat root "trees-md/a/assets/cat.png") cat.Discovery.path;
+      Alcotest.(check string) "config-relative"
+        "trees-md/a/assets/cat.png"
+        (Path_safe.to_string cat.Discovery.config_relative))
+
+(* A hidden file is not a source, and it is not an attachment either: what an
+   embed can reach is what the scan is willing to look at. *)
+let test_hidden_attachments_skipped () =
+  with_fixture (fun root ->
+    let config = standard_fixture ~root in
+    write_file (Filename.concat root "trees-md/.obsidian/workspace.json") "{}\n";
+    write_file (Filename.concat root "trees-md/.secret.png") "secret\n";
+    let t = expect_ok_scan "scan" (Discovery.scan config) in
+    Alcotest.(check (list string)) "nothing hidden"
+      [ "ignored.md" ]
+      (List.map
+         (fun (a : Discovery.attachment) ->
+           Path_safe.to_string a.Discovery.source_relative)
+         t.Discovery.attachments))
 
 let test_asset_matches () =
   with_fixture (fun root ->
@@ -299,6 +342,8 @@ let () =
         test_case "discovers_and_mirrors" `Quick test_scan_mirrors_and_orders;
         test_case "symlinks_skipped" `Quick test_symlinks_skipped;
         test_case "asset_matches" `Quick test_asset_matches;
+        test_case "attachments_discovered" `Quick test_attachments_are_everything_else;
+        test_case "hidden_attachments_skipped" `Quick test_hidden_attachments_skipped;
         test_case "hidden_source_root_skipped" `Quick test_hidden_source_root_skipped;
         test_case "nonexistent_generated_root_ok" `Quick test_nonexistent_generated_root_ok;
       ]

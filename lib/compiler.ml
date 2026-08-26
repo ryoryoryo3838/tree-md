@@ -361,12 +361,42 @@ let output_for (record : Discovery.source_file) root_id =
   | Ok relative -> relative
   | Error _ -> record.Discovery.output_relative
 
-let make_expected (record : Discovery.source_file) root_id bytes =
+(* Every managed path is written the way tree-md.toml names it — below the
+   directory that file is in — because a build owns files under the output
+   root and, when `[assets].into` says so, under an asset root as well. One
+   root could not name both. *)
+let make_expected ~output_root (record : Discovery.source_file) root_id bytes =
   { source_path = record.Discovery.path;
     source_config_relative = record.Discovery.config_relative;
-    output_relative = output_for record root_id;
+    output_relative = Path_safe.append output_root (output_for record root_id);
     bytes;
     sha256 = sha256_hex bytes }
+
+(* An attachment is copied byte for byte: the file Forester serves has to be
+   the file the vault holds. *)
+let read_bytes path =
+  try
+    let channel = open_in_bin path in
+    Fun.protect
+      ~finally:(fun () -> close_in_noerr channel)
+      (fun () -> Ok (really_input_string channel (in_channel_length channel)))
+  with
+  | Sys_error message ->
+    Error
+      [ Diagnostic.make TM404 (Span.Path path)
+          (path ^ ": cannot read attachment: " ^ message) ]
+
+let attachment_expected (copy : Forest_index.attachment_copy) =
+  let record = copy.Forest_index.attachment in
+  match read_bytes record.Discovery.path with
+  | Error diagnostics -> Error diagnostics
+  | Ok bytes ->
+    Ok
+      { source_path = record.Discovery.path;
+        source_config_relative = record.Discovery.config_relative;
+        output_relative = copy.Forest_index.destination;
+        bytes;
+        sha256 = sha256_hex bytes }
 
 (* What a compile produced: the outputs the published trees name, and how many
    sources `[publish].from` left out. The count is reported rather than the
@@ -385,7 +415,7 @@ let compare_expected (a : expected) (b : expected) =
   if by_output <> 0 then by_output
   else String.compare a.source_path b.source_path
 
-let emit_documents resolutions records =
+let emit_documents ~output_root resolutions records =
   List.fold_left
     (fun (diags, expecteds) ((record : Discovery.source_file), document) ->
       let root_id = document.Parsed_document.outline.Outline.root_id in
@@ -398,7 +428,8 @@ let emit_documents resolutions records =
         (match emit ~resolution document with
          | Error more -> (more @ diags, expecteds)
          | Ok (bytes, warnings) ->
-           (warnings @ diags, make_expected record root_id bytes :: expecteds)))
+           (warnings @ diags,
+            make_expected ~output_root record root_id bytes :: expecteds)))
     ([], []) records
 
 (* A file name can stand in for an address only when it could be one at all
@@ -643,25 +674,40 @@ let compile_forest ?(allow_pending = false) ?mdbase config discovery =
      the other sources are reported independently. An unpublished tree is
      invisible here, so it can neither be reached nor collide with one. *)
   let documents = List.rev_map snd records in
-  let stage_diags, resolutions =
+  let stage_diags, resolutions, copies =
     match
       Forest_index.build ~handwritten:discovery.Discovery.handwritten_roots
         ~generated:documents
     with
-    | Error build_diags -> (build_diags, [])
+    | Error build_diags -> (build_diags, [], [])
     | Ok index ->
-      (match Forest_index.resolve config.Config.forest index ~documents with
-       | Error resolve_diags -> (resolve_diags, [])
-       | Ok (resolutions, warnings) -> (warnings, resolutions))
+      (match
+         Forest_index.resolve ~attachments:discovery.Discovery.attachments
+           ?into:config.Config.attachments config.Config.forest index ~documents
+       with
+       | Error resolve_diags -> (resolve_diags, [], [])
+       | Ok ((resolutions, copies), warnings) -> (warnings, resolutions, copies))
   in
+  let output_root = fst config.Config.output_root in
   let emit_diags, expecteds =
     if resolutions = [] then ([], [])
-    else emit_documents resolutions records
+    else emit_documents ~output_root resolutions records
+  in
+  (* The attachments the published trees reached are outputs like the trees
+     are: named by the manifest, hashed, and removed when nothing embeds them
+     any more. *)
+  let copy_diags, expecteds =
+    List.fold_left
+      (fun (diags, expecteds) copy ->
+        match attachment_expected copy with
+        | Error more -> (more @ diags, expecteds)
+        | Ok expected -> (diags, expected :: expecteds))
+      ([], expecteds) copies
   in
   let diagnostics =
     List.sort Diagnostic.compare
       (mdbase_warnings @ publish_diags @ parse_diags @ pending_diags
-       @ stage_diags @ emit_diags)
+       @ stage_diags @ emit_diags @ copy_diags)
   in
   Diagnostic.gate
     ({ outputs = List.sort compare_expected expecteds; unpublished })

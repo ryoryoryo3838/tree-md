@@ -5,7 +5,15 @@
    pure function of two manifests. *)
 
 let current_version = Version.current
-let format_version = 1
+
+(* Format 2 writes every path the way tree-md.toml names it — relative to the
+   directory holding that file — where format 1 wrote an output relative to
+   the output root. The change is what lets one manifest own a generated tree
+   and an attachment copied under an asset root, which are in different
+   places. A format 1 manifest is still read: its outputs are lifted by the
+   output root they were written against, so an upgrade rewrites the file
+   rather than rebuilding the forest. *)
+let format_version = 2
 
 type entry = {
   source : Path_safe.relative;
@@ -25,12 +33,6 @@ type operation =
   | Replace of { old_entry : entry; new_entry : entry }
   | Delete of entry
   | Unchanged of entry
-
-let has_suffix ~suffix value =
-  let value_length = String.length value in
-  let suffix_length = String.length suffix in
-  value_length >= suffix_length
-  && String.sub value (value_length - suffix_length) suffix_length = suffix
 
 let is_lower_hex = function
   | '0' .. '9' | 'a' .. 'f' -> true
@@ -127,25 +129,25 @@ let decode_string path label = function
 
 let decode_format path = function
   | `Int 1 -> Ok 1
+  | `Int 2 -> Ok 2
   | `Int version ->
     field_error path (Printf.sprintf "unsupported format version %d" version)
   | _ -> field_error path "format must be an integer"
 
+(* What a managed file is called is not the manifest's business: a build
+   writes a tree compiled from a `.tree.md`, and an attachment copied from
+   whatever the vault happened to name it. Only the reserved names are
+   refused, because those are the compiler's own state. *)
 let validate_entry_paths path source output =
   match Path_safe.relative source with
   | Error message -> field_error path ("invalid source path: " ^ message)
   | Ok source_relative ->
-    if not (has_suffix ~suffix:".tree.md" source) then
-      field_error path "source path must end in .tree.md"
-    else
-      match Path_safe.relative output with
-      | Error message -> field_error path ("invalid output path: " ^ message)
-      | Ok output_relative ->
-        if not (has_suffix ~suffix:".tree" output) then
-          field_error path "output path must end in .tree"
-        else if has_tree_md_component output then
-          field_error path "output path uses a reserved .tree-md component"
-        else Ok (source_relative, output_relative)
+    match Path_safe.relative output with
+    | Error message -> field_error path ("invalid output path: " ^ message)
+    | Ok output_relative ->
+      if has_tree_md_component output then
+        field_error path "output path uses a reserved .tree-md component"
+      else Ok (source_relative, output_relative)
 
 let decode_entry path = function
   | `Assoc assoc ->
@@ -194,7 +196,15 @@ let decode_files path = function
     Ok (sort_files files)
   | _ -> field_error path "files must be an array"
 
-let decode ~path contents =
+(* A format 1 manifest names its outputs below the output root; the same
+   files are named below the configuration's own directory in format 2. *)
+let lift_outputs ~output_root files =
+  List.map
+    (fun entry ->
+      { entry with output = Path_safe.append output_root entry.output })
+    files
+
+let decode ?output_root ~path contents =
   let json =
     try Ok (Yojson.Safe.from_string contents)
     with Yojson.Json_error message ->
@@ -223,7 +233,12 @@ let decode ~path contents =
     let* compiler = decode_string path "compiler" compiler_value in
     let* target = decode_string path "target" target_value in
     let* files = decode_files path files_value in
-    Ok { format; compiler; target; files }
+    let files =
+      match (format, output_root) with
+      | 1, Some output_root -> sort_files (lift_outputs ~output_root files)
+      | _ -> files
+    in
+    Ok { format = format_version; compiler; target; files }
   | Ok _ -> field_error path "manifest must be a JSON object"
 
 (* ── Expected-state diff ── *)

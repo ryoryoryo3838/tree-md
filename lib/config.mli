@@ -26,6 +26,19 @@ type id_policy = {
 
 val default_id_policy : id_policy
 
+(* Where an attachment kept beside the notes is copied to, so that Forester
+   has it under an asset root and `\route-asset` can name it: `[assets].into`.
+   Absent means attachments are not published, which is what a forest did
+   before the table existed.
+
+   [directory] is the destination; [route_prefix] is that same directory
+   relative to the one holding `forest.toml`, which is what a route carries. *)
+type attachments = {
+  config_relative : Path_safe.relative;
+  directory : string;
+  route_prefix : string;
+}
+
 type t = {
   path : string;
   directory : string;
@@ -37,6 +50,9 @@ type t = {
   (* `[publish].from`: the source-root-relative globs a build starts from.
      Empty means the table was absent, and every source is published. *)
   publish_from : string list;
+  (* `[assets].into`: where an attachment a published tree reached is copied.
+     None means the table was absent and no attachment is copied anywhere. *)
+  attachments : attachments option;
 }
 
 val load : path:string -> (t, Diagnostic.t list) result

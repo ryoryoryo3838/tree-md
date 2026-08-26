@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `[assets].into` in `tree-md.toml` says where an attachment a published tree
+  embeds is copied to, so that a vault can keep its attachments beside its
+  notes — `DAILY/assets/CYCL-01.jpg` — and Forester can still serve them,
+  which it does only from a directory `forest.toml` names. The copy keeps the
+  path the file had below its source root, is routed through
+  `\route-asset` at that path, and is manifest-owned like every other
+  generated file: hash-checked, restored when missing, deleted once nothing
+  embeds it, and never overwritten by hand.
+
+  What publishes an attachment is reachability, exactly as with a note: only
+  what a published tree embeds is copied, so a vault that is mostly private
+  stays that way. An asset root answers before the vault, so a file kept where
+  the forest keeps its assets is published where it lies; and a copy already
+  made under `into` is this build's own output rather than an asset to find,
+  without which a build would depend on whether the last one ran.
+
+  Without the table nothing is copied and an embed naming a file only the
+  vault holds is still `TM203` — but the diagnostic now says where the file
+  is and which setting carries it across, instead of sending the writer to
+  look for a file that is sitting right there.
+
 - `[publish].from` in `tree-md.toml` names the trees a build starts from, as
   globs relative to a source root; everything those reach transitively comes
   with them. A whole Obsidian vault can then be the source without the whole
@@ -170,6 +191,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Japanese README ([`README.ja.md`](./README.ja.md)).
 
 ### Changed
+
+- The manifest names every managed file the way `tree-md.toml` names one:
+  relative to the directory that file is in. Format 1 named an output below
+  the output root, which one manifest cannot do for both a tree and an
+  attachment copied under an asset root — they are in different places. A
+  format 1 manifest is read and rewritten rather than rejected, so upgrading
+  costs a rewrite of the file and not a rebuild of the forest.
+
+  With that, what a managed file is *called* stops being the manifest's
+  business: an output no longer has to end in `.tree`, nor a source in
+  `.tree.md`. What is refused is what the compiler reserves — a `.tree-md`
+  path component — and a manifest naming a file under a source root, which no
+  build writes to and which acting on would delete somebody's note.
 
 - Front matter is read in two steps that no longer know about each other. The
   parser builds the mapping exactly as written, in the JSON data model mdbase

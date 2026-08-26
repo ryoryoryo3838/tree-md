@@ -58,8 +58,12 @@ let sort_operations operations = List.sort compare_operation operations
 
 (* ── Creation from a manifest diff ── *)
 
-let create ~transaction_id ~old_manifest ~(new_manifest : Manifest.t)
-    (operations : Manifest.operation list) =
+(* [base_manifest_sha256] is the hash of the manifest as it is on disk. It is
+   passed when that differs from what re-encoding the decoded manifest gives —
+   a manifest written in an older format says the same thing in different
+   bytes, and the precondition this journal is checked against is the bytes. *)
+let create ?base_manifest_sha256 ~transaction_id ~old_manifest
+    ~(new_manifest : Manifest.t) (operations : Manifest.operation list) =
   if not (valid_transaction_id transaction_id) then
     invalid_arg
       ("Transaction.create: transaction id must match [A-Za-z0-9_-]+: "
@@ -68,8 +72,11 @@ let create ~transaction_id ~old_manifest ~(new_manifest : Manifest.t)
   let manifest_temporary = Path_safe.append stage (relative "manifest.tmp") in
   let new_manifest_sha256 = Manifest.sha256 (Manifest.encode new_manifest) in
   let base_manifest_sha256 =
-    Option.map (fun manifest -> Manifest.sha256 (Manifest.encode manifest))
-      old_manifest
+    match base_manifest_sha256 with
+    | Some _ as hash -> hash
+    | None ->
+      Option.map (fun manifest -> Manifest.sha256 (Manifest.encode manifest))
+        old_manifest
   in
   let operations =
     List.filter_map
@@ -191,12 +198,6 @@ let is_lower_hex = function
 let valid_sha256 hash =
   String.length hash = 64 && String.for_all is_lower_hex hash
 
-let has_suffix ~suffix value =
-  let value_length = String.length value in
-  let suffix_length = String.length suffix in
-  value_length >= suffix_length
-  && String.sub value (value_length - suffix_length) suffix_length = suffix
-
 let has_tree_md_component path =
   List.exists
     (fun component ->
@@ -241,13 +242,14 @@ let decode_optional_path path label = function
      | Error message -> field_error path (label ^ " path: " ^ message))
   | _ -> field_error path (label ^ " must be a string or null")
 
+(* What an output is called is the manifest's business, and it does not have
+   one either: a build writes trees and, when `[assets].into` says so, copies
+   of the attachments they embed. Only the reserved names are refused. *)
 let validate_output path output =
   match Path_safe.relative output with
   | Error message -> field_error path ("invalid output path: " ^ message)
   | Ok relative_path ->
-    if not (has_suffix ~suffix:".tree" output) then
-      field_error path "output path must end in .tree"
-    else if has_tree_md_component output then
+    if has_tree_md_component output then
       field_error path "output path uses a reserved .tree-md component"
     else Ok relative_path
 

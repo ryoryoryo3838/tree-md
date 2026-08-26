@@ -34,7 +34,8 @@ let config root =
     output_root = (relative "generated", Filename.concat root "generated");
     target = Forester_6.target;
      publish_from = [];
-    id = Config.default_id_policy }
+    id = Config.default_id_policy;
+    attachments = None }
 
 (* The default is random, which no assertion about particular addresses can
    pin down. Tests about where the counter starts and what it steps over ask
@@ -52,7 +53,7 @@ let source root name =
     filename = name }
 
 let discovery root names =
-  { Discovery.sources = List.map (source root) names; handwritten_roots = [] }
+  { Discovery.sources = List.map (source root) names; handwritten_roots = []; attachments = [] }
 
 let plan_ok name result =
   match result with
