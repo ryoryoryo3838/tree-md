@@ -1,7 +1,14 @@
 (tests
  (names yaml_json_test json_schema_test mdbase_config_test mdbase_type_test source_test diagnostic_test tree_id_test mint_test frontmatter_test wiki_test inline_test block_test outline_test forester_6_test compiler_test config_test discovery_test forest_index_test forest_compile_test manifest_test transaction_test workspace_fs_test workspace_test cli_test)
+ (modules (:standard \ public_forest_test))
  (libraries tree-md alcotest digestif)
  (deps (source_tree fixtures)))
+
+(test
+ (name public_forest_test)
+ (modules public_forest_test)
+ (libraries tree-md tree-md.tree_of_md alcotest yojson)
+ (deps ../bin/public_main.exe))
 
 (cram
  (deps %{bin:tree-md} (source_tree fixtures)))

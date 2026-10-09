@@ -1,4 +1,12 @@
 (executable
  (name main)
  (public_name tree-md)
+ (modules main)
  (libraries tree-md cmdliner))
+
+(executable
+ (name public_main)
+ (public_name tree_of_md)
+ (package tree-md)
+ (modules public_main)
+ (libraries tree-md.tree_of_md cmdliner))

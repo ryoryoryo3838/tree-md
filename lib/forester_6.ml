@@ -720,6 +720,31 @@ let emit_blocks_top (w : writer) buf (blocks : Ir.block list) =
   in
   loop true blocks
 
+(* Small IR-only entry points: no discovery, files, or raw source evaluation. *)
+let escape_literal = escape_string
+
+let emit_metadata_fragment metadata =
+  let w = make_writer (ref []) Resolution.empty in
+  let buf = Buffer.create 256 in
+  emit_metadata w buf metadata;
+  Buffer.contents buf
+
+let emit_blocks_fragment ~resolution blocks =
+  let errors = ref [] in
+  let w = make_writer errors resolution in
+  let tex span buf value =
+    if not (validate_tex value) then
+      errors := Diagnostic.make TM107 (Span.Source_span span) "unbalanced TeX braces" :: !errors;
+    let rec marker n =
+      let token = "PFM" ^ string_of_int n in
+      if Re.execp (Re.compile (Re.str token)) value then marker (n+1) else token in
+    let token = marker 0 in
+    Buffer.add_string buf ("\\verb" ^ token ^ "|" ^ value ^ token) in
+  let w = { w with tex } in
+  let buf = Buffer.create 4096 in
+  emit_blocks_top w buf blocks;
+  Diagnostic.gate (Buffer.contents buf) (List.rev !errors)
+
 (* ── Main emit ── *)
 
 let emit ~(resolution : Resolution.t) (tree : Outline.t) =

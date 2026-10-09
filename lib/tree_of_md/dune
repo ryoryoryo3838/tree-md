@@ -1,0 +1,4 @@
+(library
+ (name tree_of_md)
+ (public_name tree-md.tree_of_md)
+ (libraries tree-md))
